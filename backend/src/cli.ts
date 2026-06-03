@@ -1,4 +1,4 @@
-import { fetchTushareData } from './services/tushare';
+import { fetchHistoricalData } from './services/dataSources';
 import { sampleWeeklyData } from './utils/sampling';
 import { normalizeStockCode } from './utils/stock';
 
@@ -15,7 +15,7 @@ async function main() {
   console.log(`\n正在获取 ${tsCode} 从 ${startDate} 到 ${endDate} 的数据...\n`);
 
   try {
-    const dailyData = await fetchTushareData(tsCode, startDate, endDate, 'forward', 'dv_ttm');
+    const dailyData = await fetchHistoricalData(tsCode, startDate, endDate, 'forward', 'dv_ttm');
     const sampledData = sampleWeeklyData(dailyData, 'dv_ttm');
 
     console.log('--- 采样输出 ---');

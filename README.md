@@ -5,7 +5,9 @@
 ## 功能特性
 - 支持按指定时间段查询 A 股股票数据。
 - 自动补全股票代码后缀 (如输入 600519 自动补全为 600519.SH)。
-- 内置 Mock 降级机制。当未配置 Tushare Token 时，内置贵州茅台 (600519.SH) 和 平安银行 (000001.SZ) 的历史数据，实现开箱即用。
+- 使用免费/公开数据源优先的 provider fallback 系统，不依赖 Tushare Pro、Wind、iFinD、Choice 终端或任何私有 API Key。
+- 按数据类型配置不同数据源优先级，并在接口和 GUI 中保留数据来源、访问层、降级状态和质量标记。
+- 内置 Mock 数据仅用于显式开启的开发或测试降级。
 - 基于 ISO 周，按照“周五 $\rightarrow$ 周四 $\rightarrow$ 周三 $\rightarrow$ 周二 $\rightarrow$ 周一”优先级对历史数据进行周采样。
 - 提供股息率与股价的时间序列图表（带数据缩放与导出）。
 - 前后端使用 Vite 代理与 concurrently 一键启动。
@@ -27,18 +29,32 @@ cd ..
 
 或者如果您已经运行了上述，可以直接进入前后端目录自行安装。
 
-## 2. 如何设置 TUSHARE_TOKEN
+## 2. 数据源优先级与配置
 
-本项目数据来源于 [Tushare Pro](https://tushare.pro/)。
-您需要在 `backend` 目录下创建 `.env` 文件，并设置您的 Token：
+本项目不使用 Tushare Pro 或任何付费数据源。Provider 优先级按数据类型配置：
+
+- 历史日线 / K 线：Baostock → Eastmoney → AKShare 通用接口 → Sina → Sohu
+- 分红、公司行动、公告和披露：CNINFO / 巨潮资讯逻辑源 → Eastmoney → AKShare 通用接口 → Sina → Sohu
+- 实时行情：Eastmoney → Sina → AKShare 通用接口 → Sohu
+- 股息率：优先由项目内部用现金分红和参考收盘价计算，再保留供应商字段作为对照
+
+Baostock、AKShare 和 CNINFO 相关访问通过可选 Python bridge 调用。未安装 Python 包、接口不可用、超时、限流或返回结构异常时，系统会记录失败原因并尝试下一个 provider。默认情况下，所有真实免费数据源均失败时 API 会返回结构化错误，不会静默返回伪数据。
+
+可在 `backend/.env` 中调整：
 
 ```bash
-# 在 backend 目录下创建 .env 文件
 cd backend
-echo "TUSHARE_TOKEN=your_token_here" > .env
+cat > .env <<'EOF'
+PROVIDER_TIMEOUT_MS=3000
+PROVIDER_RETRY_COUNT=0
+DIVIDEND_YIELD_TOLERANCE=0.03
+ENABLE_MOCK_DATA_FALLBACK=false
+ALLOW_LIVE_PROVIDER_TESTS=false
+PYTHON_BIN=python3
+EOF
 ```
 
-*注意：如果您不配置此项，系统将自动使用内置的 Mock 数据（支持 600519.SH 和 000001.SZ 的数据展示）。*
+开发时如需显式使用内置 Mock 降级，可设置 `ENABLE_MOCK_DATA_FALLBACK=true`。这不应作为生产默认数据源。
 
 ## 3. 如何运行前端和后端
 
@@ -68,6 +84,17 @@ npm run test
 ```
 
 ## 5. 已知限制
-- Tushare API 的 `daily_basic` (股息率) 接口需要 120 以上的积分权限，部分复权因子接口可能也需要额外权限。如果您遇到接口无权限的情况，系统会自动降级回退到 Mock 数据，以保证界面依然能够渲染。
+- 免费/公开数据源可能存在接口变动、限流、字段缺失或延迟。系统会验证 schema，记录每个 provider 的失败原因，并在成功结果中保留 `logical_source`、`access_layer`、`fallback_used`、`raw_field_map` 和 `quality_flags`。
+- Baostock 和 AKShare 通过可选 Python bridge 接入。未安装相关 Python 包时，provider 会被视为不可用并继续 fallback。
+- 股息率默认优先内部计算：使用最佳可用分红事件和参考收盘价。供应商股息率会保留为对照字段；当相对差异超过 `DIVIDEND_YIELD_TOLERANCE`（默认 3%）时，记录会标记 `needs_review`。
+- Sohu 和 Sina 仅作为低优先级 fallback，不作为核心长期历史数据库的主来源。
 - `echarts-for-react` 及图表在 `jsdom` (Vitest) 渲染时需要 mock `window.matchMedia` 以及相关 Canvas 接口，因此前端组件测试主要关注其 DOM 渲染的健全性而非深度图表内部交互测试。
-- 虽然 `mockData.ts` 使用了随机游走算法生成过去5年的日线数据，但与真实的股票表现并不一致，仅作降级展示用。
+- 虽然 `mockData.ts` 使用了随机游走算法生成过去5年的日线数据，但与真实的股票表现并不一致，仅作显式开发/测试降级展示用。
+
+## 6. 如何添加新 provider
+
+1. 在 `backend/src/services/providers/types.ts` 中确认 provider 名称和数据类型接口。
+2. 在 `backend/src/services/providers/adapters.ts` 中新增 adapter，返回标准化 record，并填充 source metadata。
+3. 在 `backend/src/services/providers/validation.ts` 中复用或扩展 schema 校验。
+4. 在 `backend/src/services/providers/config.ts` 中把 provider 放入对应数据类型的优先级列表。
+5. 在 `backend/tests/providers.test.ts` 中添加优先级、fallback、malformed schema 和结构化错误测试。
