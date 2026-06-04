@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import { Layout, Form, Input, InputNumber, Button, DatePicker, Select, Card, Table, Typography, Space, message, Radio, Alert, Switch, Tag, Tooltip, Collapse, Modal, ConfigProvider, theme } from 'antd';
 import ReactECharts from 'echarts-for-react';
 import axios from 'axios';
+
+axios.defaults.baseURL = 'http://localhost:3000';
+
 import dayjs from 'dayjs';
 import {
   buildCombinedChartOption,

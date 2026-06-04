@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
+import os from 'os';
 
 export const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export const STALE_CACHE_WARNING = '外部数据源不可用，已返回过期本地缓存。';
@@ -32,7 +33,7 @@ interface CacheReadResult<T> {
   fresh: boolean;
 }
 
-const cacheDir = path.resolve(__dirname, '../../cache');
+const cacheDir = path.join(os.homedir(), '.gupiao', 'cache');
 
 export function cacheTtlMsFromHours(value: unknown): number {
   if (value === undefined || value === null || value === '') return DEFAULT_CACHE_TTL_MS;
