@@ -67,6 +67,36 @@ function makeMockDailyBars(symbol: string, startDate: string, endDate: string): 
   }));
 }
 
+function makeMockDividendEvents(symbol: string, startDate?: string, endDate?: string): DividendEventRecord[] {
+  const all = getMockData(symbol).sort((a, b) => a.trade_date.localeCompare(b.trade_date));
+  const lower = startDate ?? all[0]?.trade_date ?? '2000-01-01';
+  const upper = endDate ?? all[all.length - 1]?.trade_date ?? new Date().toISOString().split('T')[0];
+  const ranged = all.filter(d => d.trade_date >= lower && d.trade_date <= upper);
+  const rows = ranged.length > 0 ? ranged : all;
+  const step = Math.max(1, Math.floor(rows.length / 10));
+
+  return rows
+    .filter((_, index) => index % step === 0)
+    .map((row, index) => ({
+      symbol,
+      ex_date: row.trade_date,
+      cash_dividend: Number((0.5 + (index % 5) * 0.1).toFixed(4)),
+      dividend_description: 'mock pre-tax cash dividend per share',
+      source_reference: 'local_mock_data',
+      metadata: {
+        logical_source: 'mock',
+        access_layer: 'local_mock_dividend_events',
+        retrieved_at: new Date().toISOString(),
+        symbol,
+        market: symbol.endsWith('.SH') ? 'SH' : symbol.endsWith('.SZ') ? 'SZ' : 'UNKNOWN',
+        source_priority_rank: 999,
+        fallback_used: true,
+        raw_field_map: {},
+        quality_flags: ['mock_data'],
+      },
+    }));
+}
+
 async function attemptDailyProvider(
   provider: DataProvider,
   symbol: string,
@@ -222,6 +252,19 @@ export function createFallbackManager(providers: DataProvider[] = createProvider
       if (records) {
         return { data: records, sourceMetadata: sourceMetadataFrom(records), attempts, warnings: [] };
       }
+    }
+
+    if (config.enableMockFallback) {
+      const data = makeMockDividendEvents(symbol, startDate, endDate);
+      const attempt: ProviderAttempt = { provider: 'mock', accessLayer: 'local_mock_dividend_events', priorityRank: 999, status: 'success', reason: 'explicit mock fallback enabled' };
+      attempts.push(attempt);
+      logAttempt('dividend_events', symbol, attempt);
+      return {
+        data,
+        sourceMetadata: sourceMetadataFrom(data),
+        attempts,
+        warnings: ['真实分红事件源不可用，当前分红事件基于 Mock 数据降级展示。'],
+      };
     }
 
     throw createProviderError('dividend_events', symbol, attempts);

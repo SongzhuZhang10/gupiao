@@ -4,6 +4,7 @@ import { getProviderConfig } from './providers/config';
 import { createProviders, fetchEastMoneyDividends } from './providers/adapters';
 import {
   DailyBarRecord,
+  DividendEventRecord,
   ProviderAttempt,
   ProviderName,
   SourceMetadata,
@@ -13,7 +14,15 @@ import { calculateDividendYield } from './providers/validation';
 export type DataSourceName = ProviderName;
 
 export interface HistoricalDataResult {
-  data: DailyData[];
+  data: DailyBarRecord[];
+  dataSource: DataSourceName;
+  warnings: string[];
+  sourceMetadata: SourceMetadata;
+  attempts?: ProviderAttempt[];
+}
+
+export interface DividendEventsResult {
+  data: DividendEventRecord[];
   dataSource: DataSourceName;
   warnings: string[];
   sourceMetadata: SourceMetadata;
@@ -121,6 +130,24 @@ export async function fetchHistoricalData(
 ): Promise<DailyData[]> {
   const result = await fetchHistoricalDataWithMeta(tsCode, startDate, endDate, priceMode, dividendMode);
   return result.data;
+}
+
+export async function fetchDividendEventsWithMeta(
+  tsCode: string,
+  startDate: string | undefined,
+  endDate: string
+): Promise<DividendEventsResult> {
+  console.log(`[Data Fetch] Fetching dividend events ${tsCode} ..${endDate} with free provider fallback`);
+  const manager = createFallbackManager(createProviders(), getProviderConfig());
+  const result = await manager.getDividendEvents(tsCode, startDate, endDate);
+
+  return {
+    data: result.data,
+    dataSource: result.sourceMetadata.logical_source,
+    warnings: result.warnings,
+    sourceMetadata: result.sourceMetadata,
+    attempts: result.attempts,
+  };
 }
 
 export { fetchEastMoneyDividends };

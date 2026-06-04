@@ -3,60 +3,59 @@ import { Layout, Form, Input, Button, DatePicker, Select, Card, Table, Typograph
 import ReactECharts from 'echarts-for-react';
 import axios from 'axios';
 import dayjs from 'dayjs';
+import {
+  buildCombinedChartOption,
+  type ApiResponse,
+  type DisplayMode,
+  type DividendYieldZoneResponse,
+  type SourceMetadataSummary,
+} from './chartOptions';
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 
-interface DataPoint {
-  week: string;
-  sampleDate: string;
-  price: number;
-  dividendYield: number | null;
-  dividendYieldMode: string;
-}
-
-interface ApiResponse {
-  stockCode: string;
-  startDate: string;
-  endDate: string;
-  dataSource?: string;
-  sourceMetadata?: SourceMetadataSummary;
-  warnings?: string[];
-  samplingRule: string;
-  points: DataPoint[];
-}
-
-interface SourceMetadataSummary {
-  logical_source: string;
-  access_layer: string;
-  fallback_used: boolean;
-  source_priority_rank: number;
-  quality_flags?: string[];
-}
+const sourceNameMap: Record<string, string> = {
+  sohu: '搜狐财经',
+  sina: '新浪财经',
+  eastmoney: '东方财富',
+  cninfo: '巨潮资讯',
+  baostock: 'Baostock开源数据',
+  akshare_generic: 'AKShare开源数据',
+  mock: '本地模拟数据',
+};
 
 export const SourceMetadataView: React.FC<{ metadata?: SourceMetadataSummary }> = ({ metadata }) => {
   if (!metadata) return null;
 
   const flags = metadata.quality_flags || [];
+  const isMock = metadata.logical_source === 'mock';
+  const sourceName = sourceNameMap[metadata.logical_source] || metadata.logical_source;
 
   return (
-    <Space size={[8, 8]} wrap style={{ marginBottom: 16 }}>
-      <Text strong>数据来源</Text>
-      <Tag color="blue">{metadata.logical_source}</Tag>
-      <Tooltip title="实际访问层">
-        <Tag>{metadata.access_layer}</Tag>
-      </Tooltip>
-      <Tag color={metadata.fallback_used ? 'orange' : 'green'}>
-        {metadata.fallback_used ? '已降级' : '首选源'}
-      </Tag>
-      <Tag>优先级 #{metadata.source_priority_rank}</Tag>
-      {flags.map(flag => (
-        <Tag key={flag} color={flag === 'needs_review' ? 'red' : 'default'}>
-          {flag}
+    <div style={{ marginBottom: 16 }}>
+      <Space size={[8, 8]} wrap>
+        <Text strong>数据来源</Text>
+        <Tag color={isMock ? 'error' : 'blue'}>{sourceName}</Tag>
+        <Tag color={metadata.fallback_used ? 'orange' : 'green'}>
+          {metadata.fallback_used ? '已降级' : '首选源'}
         </Tag>
-      ))}
-    </Space>
+        <Tag>优先级 #{metadata.source_priority_rank}</Tag>
+        {flags.map(flag => (
+          <Tag key={flag} color={flag === 'needs_review' ? 'red' : 'default'}>
+            {flag}
+          </Tag>
+        ))}
+      </Space>
+      {isMock && (
+        <Alert
+          message="警告：当前处于 Mock 降级模式，您看到的是系统自动生成的模拟数据，不能代表真实市场行情。"
+          type="error"
+          showIcon
+          style={{ marginTop: 8 }}
+        />
+      )}
+    </div>
   );
 };
 
@@ -64,8 +63,8 @@ const App: React.FC = () => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ApiResponse | null>(null);
-  const [displayMode, setDisplayMode] = useState<'both' | 'dividend' | 'price'>('both');
-  const [zonesData, setZonesData] = useState<any>(null);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('both');
+  const [zonesData, setZonesData] = useState<DividendYieldZoneResponse | null>(null);
   const [showZones, setShowZones] = useState<boolean>(true);
   const [zonesError, setZonesError] = useState<string | null>(null);
 
@@ -119,124 +118,19 @@ const App: React.FC = () => {
     }
   };
 
-  const combinedChartOption = data ? {
-    title: { text: '股价与股息率综合走势图', left: 'center' },
-    tooltip: {
-      trigger: 'axis',
-      formatter: function (params: any) {
-        let result = `<div><b>${params[0].axisValue}</b></div>`;
-        let priceStr = '';
-        let divStr = '';
-        const sampleMap = new Map();
-        if (zonesData && zonesData.samples) {
-          zonesData.samples.forEach((s: any) => sampleMap.set(s.date, s));
-        }
-
-        params.forEach((param: any) => {
-          if (param.seriesName === '股价') {
-            priceStr = `<div>${param.marker} 股价: ${param.value !== undefined ? param.value : '-'}</div>`;
-          } else if (param.seriesName === '股息率') {
-            const date = param.axisValue;
-            const zoneSample = sampleMap.get(date);
-            divStr = `<div>${param.marker} 股息率: ${param.value !== undefined ? param.value + '%' : '-'}</div>`;
-            if (zoneSample) {
-              divStr += `<div style="font-size:12px;color:#888">&nbsp;&nbsp;TTM 每股现金分红: ${zoneSample.ttmDividendPerShare}</div>`;
-              divStr += `<div style="font-size:12px;color:#888">&nbsp;&nbsp;未复权收盘价: ${zoneSample.close}</div>`;
-              const zoneLabel = zonesData.zones.find((z:any)=>z.id===zoneSample.zoneId)?.label || zoneSample.zoneId;
-              divStr += `<div style="font-size:12px;color:#888">&nbsp;&nbsp;操作区间: ${zoneLabel}</div>`;
-              divStr += `<div style="font-size:12px;color:#888">&nbsp;&nbsp;阈值: q20=${zonesData.quantiles.q20.toFixed(2)}%, q40=${zonesData.quantiles.q40.toFixed(2)}%, q60=${zonesData.quantiles.q60.toFixed(2)}%, q80=${zonesData.quantiles.q80.toFixed(2)}%</div>`;
-            }
-          }
-        });
-        return result + priceStr + divStr;
-      }
-    },
-    legend: {
-      show: true,
-      selectedMode: false,
-      left: 'left',
-      top: 0,
-      data: ['股价', '股息率'],
-      selected: {
-        '股价': displayMode === 'both' || displayMode === 'price',
-        '股息率': displayMode === 'both' || displayMode === 'dividend'
-      }
-    },
-    xAxis: {
-      type: 'category',
-      data: data.points.map(p => p.sampleDate),
-      name: '日期'
-    },
-    yAxis: [
-      {
-        type: 'value',
-        name: '价格 (元)',
-        position: 'left',
-        alignTicks: true,
-        scale: true,
-        axisLine: { show: true, lineStyle: { color: '#5470C6' } }
-      },
-      {
-        type: 'value',
-        name: '收益率 (%)',
-        position: 'right',
-        alignTicks: true,
-        scale: true,
-        axisLine: { show: true, lineStyle: { color: '#91CC75' } }
-      }
-    ],
-    dataZoom: [{ type: 'inside' }, { type: 'slider' }],
-    toolbox: {
-      feature: {
-        saveAsImage: {}
-      }
-    },
-    series: [
-      {
-        name: '股价',
-        data: data.points.map(p => p.price),
-        type: 'line',
-        smooth: true,
-        yAxisIndex: 0,
-        itemStyle: { color: '#5470C6' }
-      },
-      {
-        name: '股息率',
-        data: data.points.map(p => p.dividendYield),
-        type: 'line',
-        smooth: true,
-        yAxisIndex: 1,
-        connectNulls: false,
-        itemStyle: { color: '#91CC75' },
-        markArea: showZones && zonesData && !zonesError ? {
-          silent: true,
-          data: zonesData.zones.map((z: any) => {
-            let color = '';
-            if (z.id === 'strong_buy') color = 'rgba(0, 153, 76, 0.25)';
-            else if (z.id === 'add') color = 'rgba(173, 255, 47, 0.25)';
-            else if (z.id === 'hold') color = 'rgba(128, 128, 128, 0.15)';
-            else if (z.id === 'reduce') color = 'rgba(255, 165, 0, 0.2)';
-            else if (z.id === 'exit') color = 'rgba(255, 0, 0, 0.2)';
-            return [
-              { 
-                yAxis: z.yMin !== null ? z.yMin : 'min', 
-                itemStyle: { color }, 
-                name: z.label, 
-                label: { position: 'insideRight', color: 'rgba(0,0,0,0.4)', fontSize: 12 } 
-              },
-              { yAxis: z.yMax !== null ? z.yMax : 'max' }
-            ];
-          })
-        } : undefined
-      }
-    ]
-  } : {};
+  const combinedChartOption = data ? buildCombinedChartOption({
+    data,
+    zonesData,
+    displayMode,
+    showZones,
+    zonesError,
+  }) : {};
 
   const columns = [
     { title: '周次', dataIndex: 'week', key: 'week' },
     { title: '采样日期', dataIndex: 'sampleDate', key: 'sampleDate' },
     { title: '价格', dataIndex: 'price', key: 'price' },
-    { title: '股息率 (%)', dataIndex: 'dividendYield', key: 'dividendYield', render: (val: any) => val ?? '-' }
+    { title: '股息率 (%)', dataIndex: 'dividendYield', key: 'dividendYield', render: (val: number | null) => val ?? '-' }
   ];
 
   return (
@@ -328,7 +222,18 @@ const App: React.FC = () => {
                 </Radio.Group>
               </div>
               {zonesError && (
-                <Alert message={zonesError} type="error" showIcon style={{ marginBottom: 16 }} />
+                <Alert 
+                  message={
+                    (data?.sourceMetadata?.logical_source === 'mock' || data?.dataSource === 'mock')
+                      ? `${zonesError} (注：当前展示的走势图使用的是 Mock 模拟数据)`
+                      : zonesError.includes('无法获取股价数据')
+                        ? `操作区间计算失败：无法获取足够长期的股价数据（如10年历史），因此无法计算股息率分位数区间。但当前查询的较短时间段走势图成功获取了真实数据，并已正常展示。`
+                        : `${zonesError} (注：当前走势图使用的是真实数据)`
+                  } 
+                  type="error" 
+                  showIcon 
+                  style={{ marginBottom: 16 }} 
+                />
               )}
               <ReactECharts option={combinedChartOption} style={{ height: 500 }} />
             </Card>
