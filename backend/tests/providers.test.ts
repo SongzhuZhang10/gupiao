@@ -280,6 +280,27 @@ describe('provider validation and dividend yield', () => {
     expect(result.quality_flags).toContain('vendor_yield_disagreement');
   });
 
+  it('uses annual anchored cash dividends for static dividend yield without future dividend events', () => {
+    const result = calculateDividendYield({
+      symbol: '600519.SH',
+      asOfDate: '2024-05-01',
+      referencePrice: 100,
+      dividendEvents: [
+        dividendEvent('cninfo', 1, 3),
+        { ...dividendEvent('cninfo', 1, 9), ex_date: '2024-06-01' },
+        { ...dividendEvent('cninfo', 1, 5), ex_date: '2023-06-01' },
+      ],
+      priceMetadata: dailyBar('baostock', 1).metadata,
+      tolerance: 0.03,
+      dividendMode: 'dv_ratio',
+    });
+
+    expect(result.trailing_cash_dividend).toBe(5);
+    expect(result.reference_price).toBe(100);
+    expect(result.dividend_yield).toBe(5);
+    expect(result.calculation_method).toBe('internal_annual_anchored_cash_dividend/unadjusted_close');
+  });
+
   it('creates structured provider errors', () => {
     const error = createProviderError('daily_bars', '600519.SH', [
       { provider: 'baostock', accessLayer: 'python_bridge', priorityRank: 1, status: 'failed', reason: 'missing package' },

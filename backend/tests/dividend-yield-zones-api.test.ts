@@ -113,6 +113,21 @@ describe('API Route /api/stocks/:tsCode/dividend-yield-zones', () => {
     expect(invalidBasis.body.error).toBe('当前仅支持税前现金分红口径');
   });
 
+  it('returns 400 for malformed A-share stock codes before fetching data sources', async () => {
+    const router = await loadRouterWithMockedDataSources();
+    const { fetchHistoricalDataWithMeta, fetchDividendEventsWithMeta } = await import('../src/services/dataSources');
+    const app = createApp(router);
+
+    const res = await request(app).get(
+      '/api/stocks/60051/dividend-yield-zones?startDate=2024-01-01&endDate=2024-12-31&lookbackYears=5'
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('请输入符合A股股票代码格式的代码，例如 600519 或 600519.SH');
+    expect(fetchHistoricalDataWithMeta).not.toHaveBeenCalled();
+    expect(fetchDividendEventsWithMeta).not.toHaveBeenCalled();
+  });
+
   it('returns a structured provider error instead of deriving zones when dividend events are unavailable', async () => {
     const router = await loadRouterWithMockedDataSources(true);
     const app = createApp(router);

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layout, Form, Input, Button, DatePicker, Select, Card, Table, Typography, Space, message, Radio, Alert, Switch, Tag, Tooltip } from 'antd';
+import { Layout, Form, Input, Button, DatePicker, Select, Card, Table, Typography, Space, message, Radio, Alert, Switch, Tag, Tooltip, Collapse, Modal, ConfigProvider, theme } from 'antd';
 import ReactECharts from 'echarts-for-react';
 import axios from 'axios';
 import dayjs from 'dayjs';
@@ -14,6 +14,30 @@ import {
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
+const ALL_FREE_SOURCES_UNAVAILABLE = '所有免费数据源均不可用';
+const A_SHARE_STOCK_CODE_ERROR = '请输入符合A股股票代码格式的代码，例如 600519 或 600519.SH';
+const SH_A_SHARE_RE = /^(600|601|603|605|688)\d{3}$/;
+const SZ_A_SHARE_RE = /^(000|001|002|003|300|301)\d{3}$/;
+const appTheme = {
+  algorithm: theme.darkAlgorithm,
+  token: {
+    colorBgBase: '#0b1120',
+    colorBgContainer: '#111827',
+    colorBgElevated: '#172033',
+    colorBorder: '#243244',
+    colorPrimary: '#38bdf8',
+    colorTextBase: '#e5e7eb',
+    colorTextSecondary: '#94a3b8',
+    borderRadius: 8,
+  },
+};
+
+const cardStyle: React.CSSProperties = {
+  background: '#111827',
+  borderColor: '#243244',
+  borderRadius: 8,
+  boxShadow: '0 18px 38px rgba(0,0,0,0.28)',
+};
 
 const sourceNameMap: Record<string, string> = {
   sohu: '搜狐财经',
@@ -24,6 +48,30 @@ const sourceNameMap: Record<string, string> = {
   akshare_generic: 'AKShare开源数据',
   mock: '本地模拟数据',
 };
+
+function isValidAShareStockCode(code: unknown): boolean {
+  if (typeof code !== 'string') return false;
+  const normalizedCode = code.trim().toUpperCase();
+  if (!normalizedCode) return false;
+
+  const [digits, suffix] = normalizedCode.split('.');
+  if (!/^\d{6}$/.test(digits)) return false;
+
+  if (!suffix) {
+    return SH_A_SHARE_RE.test(digits) || SZ_A_SHARE_RE.test(digits);
+  }
+  if (suffix === 'SH') {
+    return SH_A_SHARE_RE.test(digits);
+  }
+  if (suffix === 'SZ') {
+    return SZ_A_SHARE_RE.test(digits);
+  }
+  return false;
+}
+
+function formatZoneLabel(zoneId: string, label: string): string {
+  return zoneId === 'exit' ? '清仓区' : label;
+}
 
 export const SourceMetadataView: React.FC<{ metadata?: SourceMetadataSummary }> = ({ metadata }) => {
   if (!metadata) return null;
@@ -61,6 +109,7 @@ export const SourceMetadataView: React.FC<{ metadata?: SourceMetadataSummary }> 
 
 const App: React.FC = () => {
   const [form] = Form.useForm();
+  const priceMode = Form.useWatch('priceMode', form) || 'forward';
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [displayMode, setDisplayMode] = useState<DisplayMode>('both');
@@ -73,36 +122,43 @@ const App: React.FC = () => {
     ...((zonesData && zonesData.warnings) || [])
   ]));
 
-  const onFinish = async (values: any) => {
+  const clearAnalysis = () => {
+    setData(null);
+    setZonesData(null);
+    setZonesError(null);
+  };
+
+  const fetchAnalysis = async (values: any, allowMockFallback: boolean) => {
     try {
       setLoading(true);
-      setData(null);
+      clearAnalysis();
       const [start, end] = values.dateRange;
       const startDate = start.format('YYYY-MM-DD');
       const endDate = end.format('YYYY-MM-DD');
 
-      const historyReq = axios.get(`/api/stocks/${values.stockCode}/history`, {
+      const historyRes = await axios.get(`/api/stocks/${values.stockCode}/history`, {
         params: {
           startDate,
           endDate,
           priceMode: values.priceMode,
-          dividendMode: values.dividendMode
+          dividendMode: values.dividendMode,
+          allowMockFallback,
         }
       });
 
-      const zonesReq = axios.get(`/api/stocks/${values.stockCode}/dividend-yield-zones`, {
+      const zonesRes = await axios.get(`/api/stocks/${values.stockCode}/dividend-yield-zones`, {
         params: {
           startDate,
           endDate,
           lookbackYears: values.lookbackYears,
-          dividendBasis: 'pre_tax'
+          dividendBasis: 'pre_tax',
+          allowMockFallback,
         }
       }).catch(err => {
         setZonesError(err.response?.data?.error || '获取操作区间数据失败');
         return null;
       });
 
-      const [historyRes, zonesRes] = await Promise.all([historyReq, zonesReq]);
       setData(historyRes.data);
       if (zonesRes) {
         setZonesData(zonesRes.data);
@@ -112,10 +168,26 @@ const App: React.FC = () => {
       }
     } catch (error: any) {
       console.error(error);
-      message.error(error.response?.data?.error || '获取数据失败');
+      const errorMessage = error.response?.data?.error;
+      if (!allowMockFallback && errorMessage === ALL_FREE_SOURCES_UNAVAILABLE) {
+        Modal.confirm({
+          title: ALL_FREE_SOURCES_UNAVAILABLE,
+          content: '是否使用 Mock 数据绘制图表？Mock 数据仅用于演示，不能代表真实市场行情。',
+          okText: '使用 Mock 数据',
+          cancelText: '保持空白',
+          onOk: () => fetchAnalysis(values, true),
+          onCancel: clearAnalysis,
+        });
+      } else {
+        message.error(errorMessage || '获取数据失败');
+      }
     } finally {
       setLoading(false);
     }
+  };
+
+  const onFinish = (values: any) => {
+    fetchAnalysis(values, false);
   };
 
   const combinedChartOption = data ? buildCombinedChartOption({
@@ -132,15 +204,21 @@ const App: React.FC = () => {
     { title: '价格', dataIndex: 'price', key: 'price' },
     { title: '股息率 (%)', dataIndex: 'dividendYield', key: 'dividendYield', render: (val: number | null) => val ?? '-' }
   ];
+  const priceModeLabels: Record<string, string> = {
+    unadjusted: '不复权',
+    forward: '前复权',
+    backward: '后复权',
+  };
 
   return (
-    <Layout style={{ minHeight: '100vh', background: '#f0f2f5' }}>
-      <Header style={{ background: '#fff', padding: '0 24px' }}>
-        <Title level={3} style={{ margin: '12px 0' }}>A股可视化仪表盘</Title>
+    <ConfigProvider theme={appTheme}>
+      <Layout className="app-shell" style={{ minHeight: '100vh', background: '#0b1120' }}>
+      <Header style={{ background: '#0f172a', borderBottom: '1px solid #243244', padding: '0 24px' }}>
+        <Title level={3} style={{ margin: '12px 0', color: '#f8fafc' }}>A股可视化仪表盘</Title>
       </Header>
       
       <Content style={{ padding: '24px', maxWidth: 1200, margin: '0 auto', width: '100%' }}>
-        <Card style={{ marginBottom: 24, borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+        <Card style={{ ...cardStyle, marginBottom: 24 }}>
           <Form
             form={form}
             layout="vertical"
@@ -151,11 +229,20 @@ const App: React.FC = () => {
               dateRange: [dayjs('2010-01-01'), dayjs()]
             }}
           >
-            <Space size="large" align="end" wrap>
+            <Space size="large" align="end" wrap style={{ width: '100%' }}>
               <Form.Item
                 name="stockCode"
                 label="股票代码"
-                rules={[{ required: true, message: '请输入股票代码 (例如 600519)' }]}
+                rules={[
+                  { required: true, message: '请输入股票代码 (例如 600519)' },
+                  {
+                    validator: (_, value) => (
+                      !value || isValidAShareStockCode(value)
+                        ? Promise.resolve()
+                        : Promise.reject(new Error(A_SHARE_STOCK_CODE_ERROR))
+                    ),
+                  },
+                ]}
               >
                 <Input placeholder="例如 600519 或 600519.SH" style={{ width: 200 }} />
               </Form.Item>
@@ -174,14 +261,6 @@ const App: React.FC = () => {
                 </Select>
               </Form.Item>
 
-              <Form.Item name="priceMode" label="价格模式">
-                <Select style={{ width: 150 }}>
-                  <Select.Option value="unadjusted">不复权</Select.Option>
-                  <Select.Option value="forward">前复权</Select.Option>
-                  <Select.Option value="backward">后复权</Select.Option>
-                </Select>
-              </Form.Item>
-
               <Form.Item name="dividendMode" label="股息率模式">
                 <Select style={{ width: 150 }}>
                   <Select.Option value="dv_ratio">静态股息率</Select.Option>
@@ -195,6 +274,44 @@ const App: React.FC = () => {
                 </Button>
               </Form.Item>
             </Space>
+            <div style={{ marginTop: 4 }}>
+              <Collapse
+                bordered={false}
+                size="small"
+                items={[
+                  {
+                    key: 'advanced',
+                    label: '高级选项',
+                    extra: <Text type="secondary">股价显示：{priceModeLabels[priceMode]}</Text>,
+                    children: (
+                      <Space size="large" align="start" wrap>
+                        <Form.Item
+                          name="priceMode"
+                          label={
+                            <Tooltip title="仅影响股价走势图，股息率始终按不复权收盘价计算。">
+                              <span>股价显示模式</span>
+                            </Tooltip>
+                          }
+                          style={{ marginBottom: 0 }}
+                        >
+                          <Select style={{ width: 150 }}>
+                            <Select.Option value="forward">前复权</Select.Option>
+                            <Select.Option value="unadjusted">不复权</Select.Option>
+                            <Select.Option value="backward">后复权</Select.Option>
+                          </Select>
+                        </Form.Item>
+                        <Text type="secondary" style={{ maxWidth: 420, lineHeight: 1.8 }}>
+                          仅影响股价走势图，股息率始终按不复权收盘价计算。
+                        </Text>
+                      </Space>
+                    ),
+                  },
+                ]}
+              />
+              <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+                仅影响股价走势图，股息率始终按不复权收盘价计算。
+              </Text>
+            </div>
           </Form>
         </Card>
 
@@ -208,7 +325,7 @@ const App: React.FC = () => {
 
         {data && (
           <>
-            <Card style={{ marginBottom: 24, borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+            <Card style={{ ...cardStyle, marginBottom: 24 }}>
               <SourceMetadataView metadata={data.sourceMetadata} />
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                 <div>
@@ -235,11 +352,11 @@ const App: React.FC = () => {
                   style={{ marginBottom: 16 }} 
                 />
               )}
-              <ReactECharts option={combinedChartOption} style={{ height: 500 }} />
+              <ReactECharts option={combinedChartOption} style={{ height: 500, background: '#0f172a', borderRadius: 8 }} />
             </Card>
 
             {zonesData && (
-              <Card style={{ borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)', marginBottom: 24 }}>
+              <Card style={{ ...cardStyle, marginBottom: 24 }}>
                 <Title level={4}>股息率操作区间统计</Title>
                 <Text type="secondary">
                   阈值计算窗口: {zonesData.thresholdWindowStart} 到 {zonesData.thresholdWindowEnd}
@@ -254,7 +371,7 @@ const App: React.FC = () => {
                   pagination={false}
                   style={{ marginTop: 16 }}
                   columns={[
-                    { title: '区间', dataIndex: 'label', key: 'label' },
+                    { title: '区间', dataIndex: 'label', key: 'label', render: (label: string, row: { zoneId: string }) => formatZoneLabel(row.zoneId, label) },
                     { title: '有效交易日', dataIndex: 'tradingDays', key: 'tradingDays' },
                     { title: '占总比', dataIndex: 'tradingDayRatio', key: 'tradingDayRatio', render: (v: number) => `${(v * 100).toFixed(2)}%` },
                     { title: '年均出现(天)', dataIndex: 'averageTradingDaysPerYear', key: 'averageTradingDaysPerYear' },
@@ -264,7 +381,7 @@ const App: React.FC = () => {
               </Card>
             )}
 
-            <Card style={{ borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+            <Card style={cardStyle}>
               <Title level={4}>数据表格</Title>
               <Text type="secondary">股票: {data.stockCode} | 采样规则: {data.samplingRule}</Text>
               <Table 
@@ -279,6 +396,7 @@ const App: React.FC = () => {
         )}
       </Content>
     </Layout>
+    </ConfigProvider>
   );
 };
 

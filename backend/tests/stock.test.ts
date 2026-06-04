@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeStockCode } from '../src/utils/stock';
+import { isValidAShareStockCode, normalizeStockCode } from '../src/utils/stock';
 
 describe('Stock Code Normalizer', () => {
   it('should not change already suffixed codes', () => {
@@ -21,5 +21,24 @@ describe('Stock Code Normalizer', () => {
 
   it('should return original if unrecognized', () => {
     expect(normalizeStockCode('800000')).toBe('800000');
+  });
+});
+
+describe('A-share Stock Code Sanity Check', () => {
+  it('accepts 6-digit A-share codes with or without supported exchange suffixes', () => {
+    expect(isValidAShareStockCode('600519')).toBe(true);
+    expect(isValidAShareStockCode('600519.SH')).toBe(true);
+    expect(isValidAShareStockCode('688981.sh')).toBe(true);
+    expect(isValidAShareStockCode('000001')).toBe(true);
+    expect(isValidAShareStockCode('300059.SZ')).toBe(true);
+  });
+
+  it('rejects malformed codes before data fetching', () => {
+    expect(isValidAShareStockCode('60051')).toBe(false);
+    expect(isValidAShareStockCode('6005199')).toBe(false);
+    expect(isValidAShareStockCode('800000')).toBe(false);
+    expect(isValidAShareStockCode('600519.BJ')).toBe(false);
+    expect(isValidAShareStockCode('ABCDEF')).toBe(false);
+    expect(isValidAShareStockCode('')).toBe(false);
   });
 });

@@ -14,6 +14,13 @@ const historyData: ApiResponse = {
       dividendYield: 3.2,
       dividendYieldMode: 'dv_ttm',
     },
+    {
+      week: '2024-W02',
+      sampleDate: '2024-01-12',
+      price: 102,
+      dividendYield: 2.4,
+      dividendYieldMode: 'dv_ttm',
+    },
   ],
 };
 
@@ -41,13 +48,34 @@ const zonesData: DividendYieldZoneResponse = {
       dividendYield: 3.2,
       zoneId: 'add',
     },
+    {
+      date: '2024-01-08',
+      close: 101,
+      ttmDividendPerShare: 3.1,
+      dividendYield: 3.1,
+      zoneId: 'add',
+    },
+    {
+      date: '2024-01-09',
+      close: 102,
+      ttmDividendPerShare: 2.4,
+      dividendYield: 2.4,
+      zoneId: 'hold',
+    },
+    {
+      date: '2024-01-12',
+      close: 102,
+      ttmDividendPerShare: 2.4,
+      dividendYield: 2.4,
+      zoneId: 'hold',
+    },
   ],
   stats: [],
   warnings: [],
 };
 
 describe('buildCombinedChartOption', () => {
-  it('adds all five zone labels to the legend and renders five horizontal mark areas', () => {
+  it('adds all five zone labels to the legend and renders vertical zone mark areas', () => {
     const option = buildCombinedChartOption({
       data: historyData,
       zonesData,
@@ -63,9 +91,61 @@ describe('buildCombinedChartOption', () => {
       '分批加仓区',
       '持有区',
       '逐步减仓区',
-      '清仓 / 退出区',
+      '清仓区',
     ]);
-    expect(option.series[1].markArea.data).toHaveLength(5);
+    expect(option.backgroundColor).toBe('#0f172a');
+    expect(option.legend.textStyle.color).toBe('#cbd5e1');
+    expect(option.xAxis.type).toBe('time');
+    expect(option.series[1].data[0]).toEqual(['2024-01-05', 3.2]);
+    expect(option.series[1].markArea.data).toEqual([
+      [
+        expect.objectContaining({
+          xAxis: '2024-01-05',
+          name: '分批加仓区',
+          itemStyle: { color: 'rgba(45, 212, 191, 0.30)' },
+        }),
+        { xAxis: '2024-01-08' },
+      ],
+      [
+        expect.objectContaining({
+          xAxis: '2024-01-09',
+          name: '持有区',
+          itemStyle: { color: 'rgba(203, 213, 225, 0.18)' },
+        }),
+        { xAxis: '2024-01-12' },
+      ],
+    ]);
+    expect(option.series[1].markArea.data[0][0]).not.toHaveProperty('yAxis');
+    expect(option.series[1].markArea.data[0][1]).not.toHaveProperty('yAxis');
+    expect(option.series[1].markArea.data[0][0]).not.toHaveProperty('label');
+  });
+
+  it('uses clearly separated semantic colors for neighboring buy and sell zones', () => {
+    const option = buildCombinedChartOption({
+      data: historyData,
+      zonesData: {
+        ...zonesData,
+        samples: [
+          { date: '2024-01-02', close: 100, ttmDividendPerShare: 5, dividendYield: 5, zoneId: 'exit' },
+          { date: '2024-01-03', close: 100, ttmDividendPerShare: 2, dividendYield: 2, zoneId: 'reduce' },
+          { date: '2024-01-04', close: 100, ttmDividendPerShare: 2.5, dividendYield: 2.5, zoneId: 'hold' },
+          { date: '2024-01-05', close: 100, ttmDividendPerShare: 3, dividendYield: 3, zoneId: 'add' },
+          { date: '2024-01-06', close: 100, ttmDividendPerShare: 5, dividendYield: 5, zoneId: 'strong_buy' },
+        ],
+      },
+      displayMode: 'both',
+      showZones: true,
+      zonesError: null,
+    });
+
+    expect(option.series[1].markArea.data.map((area: any) => area[0].itemStyle.color)).toEqual([
+      'rgba(220, 38, 38, 0.24)',
+      'rgba(245, 158, 11, 0.24)',
+      'rgba(203, 213, 225, 0.18)',
+      'rgba(45, 212, 191, 0.30)',
+      'rgba(74, 222, 128, 0.30)',
+    ]);
+    expect(option.series[1].markArea.data[0][0].name).toBe('清仓区');
   });
 
   it('does not render zone mark areas when only the price series is visible', () => {
@@ -87,6 +167,18 @@ describe('buildCombinedChartOption', () => {
       displayMode: 'both',
       showZones: false,
       zonesError: null,
+    });
+
+    expect(option.series[1].markArea).toBeUndefined();
+  });
+
+  it('does not render zone mark areas when there is a zones error', () => {
+    const option = buildCombinedChartOption({
+      data: historyData,
+      zonesData,
+      displayMode: 'both',
+      showZones: true,
+      zonesError: '获取操作区间数据失败',
     });
 
     expect(option.series[1].markArea).toBeUndefined();

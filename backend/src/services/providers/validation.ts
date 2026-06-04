@@ -136,16 +136,21 @@ export function calculateDividendYield(input: {
   priceMetadata: SourceMetadata;
   vendorDividendYield?: number;
   tolerance: number;
+  dividendMode?: string;
 }): DividendYieldRecord {
   const asOfTime = new Date(input.asOfDate).getTime();
   const trailingStart = asOfTime - 365 * 24 * 60 * 60 * 1000;
-  const trailingCashDividend = input.dividendEvents.reduce((sum, event) => {
+  const dividendMode = input.dividendMode === 'dv_ratio' ? 'dv_ratio' : 'dv_ttm';
+  const annualAnchorYear = new Date(input.asOfDate).getFullYear() - 1;
+  const cashDividendPerShare = input.dividendEvents.reduce((sum, event) => {
     const eventDate = event.ex_date ?? event.record_date ?? event.announcement_date;
     const eventTime = eventDate ? new Date(eventDate).getTime() : NaN;
-    if (!Number.isFinite(eventTime) || eventTime > asOfTime || eventTime <= trailingStart) return sum;
+    if (!Number.isFinite(eventTime) || eventTime > asOfTime) return sum;
+    if (dividendMode === 'dv_ttm' && eventTime <= trailingStart) return sum;
+    if (dividendMode === 'dv_ratio' && new Date(eventTime).getFullYear() !== annualAnchorYear) return sum;
     return sum + (event.cash_dividend ?? 0);
   }, 0);
-  const calculatedYield = Number(((trailingCashDividend / input.referencePrice) * 100).toFixed(4));
+  const calculatedYield = Number(((cashDividendPerShare / input.referencePrice) * 100).toFixed(4));
   const qualityFlags = [...input.priceMetadata.quality_flags];
 
   if (input.vendorDividendYield !== undefined && Number.isFinite(input.vendorDividendYield)) {
@@ -159,12 +164,14 @@ export function calculateDividendYield(input: {
   return {
     symbol: input.symbol,
     as_of_date: input.asOfDate,
-    trailing_cash_dividend: Number(trailingCashDividend.toFixed(4)),
+    trailing_cash_dividend: Number(cashDividendPerShare.toFixed(4)),
     reference_price: input.referencePrice,
     dividend_yield: calculatedYield,
     vendor_dividend_yield: input.vendorDividendYield,
     calculated_dividend_yield: calculatedYield,
-    calculation_method: 'internal_ttm_cash_dividend/reference_price',
+    calculation_method: dividendMode === 'dv_ratio'
+      ? 'internal_annual_anchored_cash_dividend/unadjusted_close'
+      : 'internal_ttm_cash_dividend/unadjusted_close',
     quality_flags: Array.from(new Set(qualityFlags)),
     metadata: {
       ...input.priceMetadata,
@@ -172,7 +179,7 @@ export function calculateDividendYield(input: {
       access_layer: 'internal_calculation',
       raw_field_map: {
         dividend: 'dividend_events.cash_dividend',
-        reference_price: 'daily_bars.close',
+        reference_price: 'daily_bars.unadjusted_close',
       },
       quality_flags: Array.from(new Set(qualityFlags)),
     },

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { normalizeStockCode } from '../utils/stock';
+import { A_SHARE_STOCK_CODE_ERROR, isValidAShareStockCode, normalizeStockCode } from '../utils/stock';
 import { fetchDividendEventsWithMeta, fetchHistoricalDataWithMeta } from '../services/dataSources';
 import { sampleWeeklyData } from '../utils/sampling';
 import { ProviderFallbackError } from '../services/providers/types';
@@ -8,8 +8,6 @@ import { calculateDividendYieldZones, INSUFFICIENT_SAMPLE_MESSAGE } from '../uti
 const router = Router();
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const STOCK_CODE_RE = /^\d{6}\.(SH|SZ)$/;
-
 function isValidDateString(value: unknown): value is string {
   if (typeof value !== 'string' || !DATE_RE.test(value)) return false;
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -28,13 +26,20 @@ function subtractDays(dateString: string, days: number): string {
   return date.toISOString().split('T')[0];
 }
 
+function isTrueQueryParam(value: unknown): boolean {
+  return value === 'true';
+}
+
 router.get('/:tsCode/history', async (req, res) => {
   try {
     const rawCode = req.params.tsCode;
-    const { startDate, endDate, priceMode = 'forward', dividendMode = 'dv_ttm' } = req.query;
+    const { startDate, endDate, priceMode = 'forward', dividendMode = 'dv_ttm', allowMockFallback } = req.query;
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: '开始日期和结束日期不能为空' });
+    }
+    if (!isValidAShareStockCode(rawCode)) {
+      return res.status(400).json({ error: A_SHARE_STOCK_CODE_ERROR });
     }
 
     const tsCode = normalizeStockCode(rawCode);
@@ -44,7 +49,8 @@ router.get('/:tsCode/history', async (req, res) => {
       startDate as string,
       endDate as string,
       priceMode as string,
-      dividendMode as string
+      dividendMode as string,
+      { allowMockFallback: isTrueQueryParam(allowMockFallback) }
     );
 
     const sampledData = sampleWeeklyData(historicalResult.data, dividendMode as 'dv_ratio' | 'dv_ttm');
@@ -80,7 +86,7 @@ router.get('/:tsCode/history', async (req, res) => {
 router.get('/:tsCode/dividend-yield-zones', async (req, res) => {
   try {
     const rawCode = req.params.tsCode;
-    const { startDate, endDate, lookbackYears = '10', dividendBasis = 'pre_tax' } = req.query;
+    const { startDate, endDate, lookbackYears = '10', dividendBasis = 'pre_tax', allowMockFallback } = req.query;
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: '开始日期和结束日期不能为空' });
@@ -103,10 +109,10 @@ router.get('/:tsCode/dividend-yield-zones', async (req, res) => {
       return res.status(400).json({ error: 'lookbackYears 必须是 5 到 10 之间的整数' });
     }
 
-    const tsCode = normalizeStockCode(rawCode);
-    if (!STOCK_CODE_RE.test(tsCode)) {
-      return res.status(400).json({ error: '股票代码格式无效' });
+    if (!isValidAShareStockCode(rawCode)) {
+      return res.status(400).json({ error: A_SHARE_STOCK_CODE_ERROR });
     }
+    const tsCode = normalizeStockCode(rawCode);
 
     const chartStartDate = startDate as string;
     const chartEndDate = endDate as string;
@@ -119,10 +125,16 @@ router.get('/:tsCode/dividend-yield-zones', async (req, res) => {
       thresholdWindowStart,
       thresholdWindowEnd,
       'unadjusted',
-      'dv_ttm'
+      'dv_ttm',
+      { allowMockFallback: isTrueQueryParam(allowMockFallback) }
     );
 
-    const dividendResult = await fetchDividendEventsWithMeta(tsCode, dividendEventStart, thresholdWindowEnd);
+    const dividendResult = await fetchDividendEventsWithMeta(
+      tsCode,
+      dividendEventStart,
+      thresholdWindowEnd,
+      { allowMockFallback: isTrueQueryParam(allowMockFallback) }
+    );
 
     const warnings: string[] = historicalResult.warnings.map(w =>
       historicalResult.dataSource === 'mock' && w.includes('当前数据基于 Mock 数据降级展示')

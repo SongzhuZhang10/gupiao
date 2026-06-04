@@ -1,6 +1,7 @@
 export interface DailyData {
   trade_date: string; // YYYY-MM-DD
-  close?: number; // unadjusted close
+  close?: number; // chart close, adjusted according to priceMode when requested
+  unadjusted_close?: number; // raw close used as the dividend yield denominator
   adj_factor?: number; // for calculating forward/backward adjusted prices
   dividend_yield?: number; // dv_ratio or dv_ttm
 }

@@ -1,0 +1,41 @@
+<h2>买卖参考区间显示方式</h2>
+<p class="subtitle">左侧是当前按股息率阈值铺横向背景，右侧是按日期所属操作区间铺竖向时间带。</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">当前：水平区间背景</div>
+    <div class="mockup-body">
+      <div style="height:280px;position:relative;border:1px solid #d7dde8;background:#fff;overflow:hidden">
+        <div style="position:absolute;inset:0 0 80%;background:rgba(0,117,63,.18)"></div>
+        <div style="position:absolute;inset:20% 0 60%;background:rgba(78,184,92,.15)"></div>
+        <div style="position:absolute;inset:40% 0 40%;background:rgba(96,125,139,.13)"></div>
+        <div style="position:absolute;inset:60% 0 20%;background:rgba(245,145,32,.15)"></div>
+        <div style="position:absolute;inset:80% 0 0;background:rgba(224,67,54,.15)"></div>
+        <svg viewBox="0 0 420 280" style="position:absolute;inset:0;width:100%;height:100%">
+          <polyline points="18,208 60,178 98,168 138,104 178,126 222,74 260,98 302,166 346,138 400,188" fill="none" stroke="#2f9e44" stroke-width="3"/>
+          <polyline points="18,188 60,174 98,160 138,132 178,120 222,108 260,116 302,136 346,128 400,146" fill="none" stroke="#5470C6" stroke-width="3" opacity=".85"/>
+        </svg>
+      </div>
+      <p>颜色表示 y 轴阈值，容易让高股息率区看起来覆盖低股息率区。</p>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">拟改：竖向时间色带</div>
+    <div class="mockup-body">
+      <div style="height:280px;position:relative;border:1px solid #d7dde8;background:#fff;overflow:hidden">
+        <div style="position:absolute;inset:0 88% 0 0;background:rgba(224,67,54,.13)"></div>
+        <div style="position:absolute;inset:0 70% 0 12%;background:rgba(245,145,32,.13)"></div>
+        <div style="position:absolute;inset:0 52% 0 30%;background:rgba(96,125,139,.11)"></div>
+        <div style="position:absolute;inset:0 34% 0 48%;background:rgba(78,184,92,.13)"></div>
+        <div style="position:absolute;inset:0 18% 0 66%;background:rgba(0,117,63,.16)"></div>
+        <div style="position:absolute;inset:0 0 0 82%;background:rgba(245,145,32,.13)"></div>
+        <svg viewBox="0 0 420 280" style="position:absolute;inset:0;width:100%;height:100%">
+          <polyline points="18,208 60,178 98,168 138,104 178,126 222,74 260,98 302,166 346,138 400,188" fill="none" stroke="#2f9e44" stroke-width="3"/>
+          <polyline points="18,188 60,174 98,160 138,132 178,120 222,108 260,116 302,136 346,128 400,146" fill="none" stroke="#5470C6" stroke-width="3" opacity=".85"/>
+        </svg>
+      </div>
+      <p>颜色表示该日期属于哪个操作区间，连续同类日期合并成一个时间带。</p>
+    </div>
+  </div>
+</div>
