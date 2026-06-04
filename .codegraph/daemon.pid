@@ -1,6 +1,6 @@
 {
-  "pid": 54134,
+  "pid": 9240,
   "version": "0.9.9",
-  "socketPath": "/home/songzhu/Desktop/gupiao/.codegraph/daemon.sock",
-  "startedAt": 1780547589250
+  "socketPath": "\\\\.\\pipe\\codegraph-3a53940bf8d14da5",
+  "startedAt": 1780559494798
 }

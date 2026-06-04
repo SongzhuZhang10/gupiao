@@ -4,10 +4,10 @@
   "description": "",
   "main": "electron/main.js",
   "scripts": {
-    "dev:backend": "cd backend && npx ts-node src/index.ts",
+    "dev:backend": "cd backend && npx nodemon src/index.ts",
     "dev:frontend": "cd frontend && npm run dev",
     "dev:electron": "electron .",
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" \"wait-on http://localhost:5173 && npm run dev:electron\"",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" \"wait-on http://127.0.0.1:5173 && npm run dev:electron\"",
     "build:backend": "cd backend && npx ncc build src/index.ts -o dist",
     "build:frontend": "cd frontend && npm run build",
     "build": "npm run build:backend && npm run build:frontend",
@@ -28,7 +28,14 @@
       "target": ["dmg"]
     },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "ia32"
+          ]
+        }
+      ]
     },
     "linux": {
       "target": ["AppImage"]
@@ -40,7 +47,7 @@
   "devDependencies": {
     "@vercel/ncc": "^0.38.4",
     "concurrently": "^10.0.3",
-    "electron": "^42.3.3",
+    "electron": "^22.3.27",
     "electron-builder": "^26.8.1",
     "electron-is-dev": "^3.0.1",
     "typescript": "^6.0.3",

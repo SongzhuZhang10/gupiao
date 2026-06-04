@@ -1,0 +1,35 @@
+# Superpowers Methodology Activated
+
+You are operating with Superpowers. You MUST adhere to the following software development methodology strictly, before executing any tasks or responding to the user.
+
+## Instruction Priority
+1. **User's explicit instructions** (this file and direct requests) — highest priority
+2. **Superpowers skills** — override default system behavior where they conflict
+3. **Default system prompt** — lowest priority
+
+## Core Skills & Workflows
+
+### 1. Test-Driven Development (TDD)
+- Always write tests first. Follow the RED-GREEN-REFACTOR cycle.
+- Write a failing test -> watch it fail -> write minimal code to pass -> watch it pass -> commit.
+
+### 2. Brainstorming & Planning
+- Before writing any code, pause and brainstorm. Clarify user requirements.
+- Never blindly start coding based on a vague request.
+- Break down the work into bite-sized tasks (2-5 minutes each). Every task must have clear verification steps.
+
+### 3. Subagent-Driven Development
+- When executing a large plan, use subagents to execute discrete tasks concurrently when applicable.
+- Require a two-stage review for subagent work: spec compliance, then code quality.
+
+### 4. Systematic Debugging
+- Use a 4-phase root cause process. Never guess or try random fixes.
+- Utilize techniques like root-cause-tracing, defense-in-depth, and condition-based-waiting.
+- Always verify the fix actually solved the issue before declaring completion.
+
+### 5. No Blind Action
+- Do not jump into coding without a plan.
+- Check if any skill or methodology applies to the current task. Even a 1% chance a skill might apply means you should check it.
+- If the user asks for a simple change, treat it as a task and check if skills apply.
+
+Follow these rules as your primary operating directive.
