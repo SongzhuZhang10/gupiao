@@ -101,7 +101,6 @@ describe('buildCombinedChartOption', () => {
       [
         expect.objectContaining({
           xAxis: '2024-01-05',
-          name: '分批加仓区',
           itemStyle: { color: 'rgba(45, 212, 191, 0.30)' },
         }),
         { xAxis: '2024-01-08' },
@@ -109,7 +108,6 @@ describe('buildCombinedChartOption', () => {
       [
         expect.objectContaining({
           xAxis: '2024-01-09',
-          name: '持有区',
           itemStyle: { color: 'rgba(203, 213, 225, 0.18)' },
         }),
         { xAxis: '2024-01-12' },
@@ -117,6 +115,7 @@ describe('buildCombinedChartOption', () => {
     ]);
     expect(option.series[1].markArea.data[0][0]).not.toHaveProperty('yAxis');
     expect(option.series[1].markArea.data[0][1]).not.toHaveProperty('yAxis');
+    expect(option.series[1].markArea.data[0][0]).not.toHaveProperty('name');
     expect(option.series[1].markArea.data[0][0]).not.toHaveProperty('label');
   });
 
@@ -145,7 +144,7 @@ describe('buildCombinedChartOption', () => {
       'rgba(45, 212, 191, 0.30)',
       'rgba(74, 222, 128, 0.30)',
     ]);
-    expect(option.series[1].markArea.data[0][0].name).toBe('清仓区');
+    expect(option.series[1].markArea.data[0][0]).not.toHaveProperty('name');
   });
 
   it('does not render zone mark areas when only the price series is visible', () => {

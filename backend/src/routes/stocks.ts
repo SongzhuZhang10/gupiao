@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { A_SHARE_STOCK_CODE_ERROR, isValidAShareStockCode, normalizeStockCode } from '../utils/stock';
-import { fetchDividendEventsWithMeta, fetchHistoricalDataWithMeta } from '../services/dataSources';
+import { fetchCachedDividendEventsWithMeta, fetchCachedHistoricalDataWithMeta } from '../services/dataSources';
 import { sampleWeeklyData } from '../utils/sampling';
 import { ProviderFallbackError } from '../services/providers/types';
 import { calculateDividendYieldZones, INSUFFICIENT_SAMPLE_MESSAGE } from '../utils/dividendYieldZones';
+import { cacheTtlMsFromHours } from '../services/stockCache';
 
 const router = Router();
 
@@ -33,7 +34,7 @@ function isTrueQueryParam(value: unknown): boolean {
 router.get('/:tsCode/history', async (req, res) => {
   try {
     const rawCode = req.params.tsCode;
-    const { startDate, endDate, priceMode = 'forward', dividendMode = 'dv_ttm', allowMockFallback } = req.query;
+    const { startDate, endDate, priceMode = 'forward', dividendMode = 'dv_ttm', allowMockFallback, cacheTtlHours } = req.query;
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: '开始日期和结束日期不能为空' });
@@ -44,13 +45,13 @@ router.get('/:tsCode/history', async (req, res) => {
 
     const tsCode = normalizeStockCode(rawCode);
 
-    const historicalResult = await fetchHistoricalDataWithMeta(
+    const historicalResult = await fetchCachedHistoricalDataWithMeta(
       tsCode,
       startDate as string,
       endDate as string,
       priceMode as string,
       dividendMode as string,
-      { allowMockFallback: isTrueQueryParam(allowMockFallback) }
+      { allowMockFallback: isTrueQueryParam(allowMockFallback), cacheTtlMs: cacheTtlMsFromHours(cacheTtlHours) }
     );
 
     const sampledData = sampleWeeklyData(historicalResult.data, dividendMode as 'dv_ratio' | 'dv_ttm');
@@ -86,7 +87,7 @@ router.get('/:tsCode/history', async (req, res) => {
 router.get('/:tsCode/dividend-yield-zones', async (req, res) => {
   try {
     const rawCode = req.params.tsCode;
-    const { startDate, endDate, lookbackYears = '10', dividendBasis = 'pre_tax', allowMockFallback } = req.query;
+    const { startDate, endDate, lookbackYears = '10', dividendBasis = 'pre_tax', allowMockFallback, cacheTtlHours } = req.query;
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: '开始日期和结束日期不能为空' });
@@ -120,20 +121,25 @@ router.get('/:tsCode/dividend-yield-zones', async (req, res) => {
     const thresholdWindowEnd = chartEndDate;
     const dividendEventStart = subtractDays(thresholdWindowStart, 365);
 
-    const historicalResult = await fetchHistoricalDataWithMeta(
+    const cacheOptions = {
+      allowMockFallback: isTrueQueryParam(allowMockFallback),
+      cacheTtlMs: cacheTtlMsFromHours(cacheTtlHours),
+    };
+
+    const historicalResult = await fetchCachedHistoricalDataWithMeta(
       tsCode,
       thresholdWindowStart,
       thresholdWindowEnd,
       'unadjusted',
       'dv_ttm',
-      { allowMockFallback: isTrueQueryParam(allowMockFallback) }
+      cacheOptions
     );
 
-    const dividendResult = await fetchDividendEventsWithMeta(
+    const dividendResult = await fetchCachedDividendEventsWithMeta(
       tsCode,
       dividendEventStart,
       thresholdWindowEnd,
-      { allowMockFallback: isTrueQueryParam(allowMockFallback) }
+      cacheOptions
     );
 
     const warnings: string[] = historicalResult.warnings.map(w =>

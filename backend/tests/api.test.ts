@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import stocksRouter from '../src/routes/stocks';
+import cacheRouter from '../src/routes/cache';
 
 const app = express();
 app.use(express.json());
 app.use('/api/stocks', stocksRouter);
+app.use('/api/cache', cacheRouter);
 
 describe('API Route /api/stocks/:tsCode/history', () => {
   beforeEach(() => {
@@ -85,5 +87,42 @@ describe('API Route /api/stocks/:tsCode/history', () => {
     expect(res.body.sourceMetadata.logical_source).toBe('mock');
     expect(res.body.warnings).toContain('真实数据源不可用，当前操作区间基于 Mock 数据降级展示。');
     expect(res.body.samples.length).toBeGreaterThanOrEqual(100);
+  });
+});
+
+describe('API Route DELETE /api/cache/stocks', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns success when stock cache is cleared', async () => {
+    const res = await request(app).delete('/api/cache/stocks');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      success: true,
+      message: 'Stock data cache cleared successfully.',
+    });
+  });
+
+  it('returns a failure payload when stock cache cannot be cleared', async () => {
+    vi.doMock('../src/services/stockCache', () => ({
+      clearStockDataCache: vi.fn(async () => {
+        throw new Error('permission denied');
+      }),
+    }));
+    vi.resetModules();
+    const { default: mockedCacheRouter } = await import('../src/routes/cache');
+    const isolated = express();
+    isolated.use(express.json());
+    isolated.use('/api/cache', mockedCacheRouter);
+
+    const res = await request(isolated).delete('/api/cache/stocks');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({
+      success: false,
+      message: 'Failed to clear stock data cache.',
+    });
   });
 });

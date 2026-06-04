@@ -11,6 +11,7 @@ import {
   SourceMetadata,
 } from './providers/types';
 import { calculateDividendYield } from './providers/validation';
+import { DEFAULT_CACHE_TTL_MS, withStockCache } from './stockCache';
 
 export type DataSourceName = ProviderName;
 
@@ -32,6 +33,7 @@ export interface DividendEventsResult {
 
 interface FetchDataSourceOptions {
   allowMockFallback?: boolean;
+  cacheTtlMs?: number;
 }
 
 function providerConfigFor(options?: FetchDataSourceOptions): ProviderConfig {
@@ -151,6 +153,22 @@ export async function fetchHistoricalDataWithMeta(
   };
 }
 
+export async function fetchCachedHistoricalDataWithMeta(
+  tsCode: string,
+  startDate: string,
+  endDate: string,
+  priceMode: string,
+  dividendMode: string,
+  options?: FetchDataSourceOptions
+): Promise<HistoricalDataResult> {
+  return withStockCache({
+    dataType: 'history',
+    params: { tsCode, startDate, endDate, priceMode, dividendMode },
+    ttlMs: options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS,
+    fetchFresh: () => fetchHistoricalDataWithMeta(tsCode, startDate, endDate, priceMode, dividendMode, options),
+  });
+}
+
 export async function fetchHistoricalData(
   tsCode: string,
   startDate: string,
@@ -179,6 +197,20 @@ export async function fetchDividendEventsWithMeta(
     sourceMetadata: result.sourceMetadata,
     attempts: result.attempts,
   };
+}
+
+export async function fetchCachedDividendEventsWithMeta(
+  tsCode: string,
+  startDate: string | undefined,
+  endDate: string,
+  options?: FetchDataSourceOptions
+): Promise<DividendEventsResult> {
+  return withStockCache({
+    dataType: 'dividend-events',
+    params: { tsCode, startDate, endDate },
+    ttlMs: options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS,
+    fetchFresh: () => fetchDividendEventsWithMeta(tsCode, startDate, endDate, options),
+  });
 }
 
 export { fetchEastMoneyDividends };

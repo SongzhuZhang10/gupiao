@@ -45,14 +45,13 @@ async function loadRouterWithMockedDataSources(dividendFailure = false) {
   vi.resetModules();
   vi.doMock('../src/services/dataSources', async () => {
     const { ProviderFallbackError } = await import('../src/services/providers/types');
-    return {
-    fetchHistoricalDataWithMeta: vi.fn(async () => ({
+    const fetchHistoricalDataWithMeta = vi.fn(async () => ({
       data: dailyBars(1500),
       dataSource: 'baostock',
       warnings: [],
       sourceMetadata: metadata(),
-    })),
-    fetchDividendEventsWithMeta: vi.fn(async () => {
+    }));
+    const fetchDividendEventsWithMeta = vi.fn(async () => {
       if (dividendFailure) {
         throw new ProviderFallbackError('dividend_events', '600519.SH', [
           {
@@ -83,8 +82,13 @@ async function loadRouterWithMockedDataSources(dividendFailure = false) {
         warnings: [],
         sourceMetadata: metadata('cninfo'),
       };
-    }),
-  };
+    });
+    return {
+      fetchHistoricalDataWithMeta,
+      fetchCachedHistoricalDataWithMeta: fetchHistoricalDataWithMeta,
+      fetchDividendEventsWithMeta,
+      fetchCachedDividendEventsWithMeta: fetchDividendEventsWithMeta,
+    };
   });
 
   const mod = await import('../src/routes/stocks');
@@ -115,7 +119,7 @@ describe('API Route /api/stocks/:tsCode/dividend-yield-zones', () => {
 
   it('returns 400 for malformed A-share stock codes before fetching data sources', async () => {
     const router = await loadRouterWithMockedDataSources();
-    const { fetchHistoricalDataWithMeta, fetchDividendEventsWithMeta } = await import('../src/services/dataSources');
+    const { fetchCachedHistoricalDataWithMeta, fetchCachedDividendEventsWithMeta } = await import('../src/services/dataSources');
     const app = createApp(router);
 
     const res = await request(app).get(
@@ -124,8 +128,8 @@ describe('API Route /api/stocks/:tsCode/dividend-yield-zones', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('请输入符合A股股票代码格式的代码，例如 600519 或 600519.SH');
-    expect(fetchHistoricalDataWithMeta).not.toHaveBeenCalled();
-    expect(fetchDividendEventsWithMeta).not.toHaveBeenCalled();
+    expect(fetchCachedHistoricalDataWithMeta).not.toHaveBeenCalled();
+    expect(fetchCachedDividendEventsWithMeta).not.toHaveBeenCalled();
   });
 
   it('returns a structured provider error instead of deriving zones when dividend events are unavailable', async () => {

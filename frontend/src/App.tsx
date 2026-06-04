@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layout, Form, Input, Button, DatePicker, Select, Card, Table, Typography, Space, message, Radio, Alert, Switch, Tag, Tooltip, Collapse, Modal, ConfigProvider, theme } from 'antd';
+import { Layout, Form, Input, InputNumber, Button, DatePicker, Select, Card, Table, Typography, Space, message, Radio, Alert, Switch, Tag, Tooltip, Collapse, Modal, ConfigProvider, theme } from 'antd';
 import ReactECharts from 'echarts-for-react';
 import axios from 'axios';
 import dayjs from 'dayjs';
@@ -135,14 +135,16 @@ const App: React.FC = () => {
       const [start, end] = values.dateRange;
       const startDate = start.format('YYYY-MM-DD');
       const endDate = end.format('YYYY-MM-DD');
+      const cacheTtlHours = values.cacheTtlHours ?? 24;
 
       const historyRes = await axios.get(`/api/stocks/${values.stockCode}/history`, {
         params: {
           startDate,
           endDate,
-          priceMode: values.priceMode,
+          priceMode: values.priceMode ?? 'forward',
           dividendMode: values.dividendMode,
           allowMockFallback,
+          cacheTtlHours,
         }
       });
 
@@ -153,6 +155,7 @@ const App: React.FC = () => {
           lookbackYears: values.lookbackYears,
           dividendBasis: 'pre_tax',
           allowMockFallback,
+          cacheTtlHours,
         }
       }).catch(err => {
         setZonesError(err.response?.data?.error || '获取操作区间数据失败');
@@ -188,6 +191,25 @@ const App: React.FC = () => {
 
   const onFinish = (values: any) => {
     fetchAnalysis(values, false);
+  };
+
+  const clearLocalCache = () => {
+    Modal.confirm({
+      title: '清除本地缓存',
+      content: '确定要删除后端本地股票数据缓存吗？之后再次查询会重新请求外部数据源。',
+      okText: '清除缓存',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await axios.delete('/api/cache/stocks');
+          message.success('本地缓存已清除。');
+        } catch (error) {
+          console.error(error);
+          message.error('清除缓存失败，请稍后重试。');
+        }
+      },
+    });
   };
 
   const combinedChartOption = data ? buildCombinedChartOption({
@@ -226,6 +248,7 @@ const App: React.FC = () => {
             initialValues={{
               priceMode: 'forward',
               dividendMode: 'dv_ttm',
+              cacheTtlHours: 24,
               dateRange: [dayjs('2010-01-01'), dayjs()]
             }}
           >
@@ -273,6 +296,12 @@ const App: React.FC = () => {
                   分析
                 </Button>
               </Form.Item>
+
+              <Form.Item>
+                <Button danger onClick={clearLocalCache}>
+                  清除本地缓存
+                </Button>
+              </Form.Item>
             </Space>
             <div style={{ marginTop: 4 }}>
               <Collapse
@@ -303,6 +332,16 @@ const App: React.FC = () => {
                         <Text type="secondary" style={{ maxWidth: 420, lineHeight: 1.8 }}>
                           仅影响股价走势图，股息率始终按不复权收盘价计算。
                         </Text>
+                        <Form.Item
+                          name="cacheTtlHours"
+                          label="缓存有效期"
+                          style={{ marginBottom: 0 }}
+                          rules={[
+                            { type: 'number', min: 1, message: '缓存有效期至少为 1 小时' },
+                          ]}
+                        >
+                          <InputNumber min={1} precision={0} addonAfter="小时" style={{ width: 150 }} />
+                        </Form.Item>
                       </Space>
                     ),
                   },

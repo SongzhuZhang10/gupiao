@@ -153,7 +153,6 @@ function buildVerticalZoneMarkAreas(zonesData: DividendYieldZoneResponse) {
         {
           xAxis: currentStart.date,
           itemStyle: { color: ZONE_COLORS[currentStart.zoneId] },
-          name: zoneLabel(zonesData, currentStart.zoneId),
         },
         { xAxis: previous.date },
       ]);
@@ -166,7 +165,6 @@ function buildVerticalZoneMarkAreas(zonesData: DividendYieldZoneResponse) {
     {
       xAxis: currentStart.date,
       itemStyle: { color: ZONE_COLORS[currentStart.zoneId] },
-      name: zoneLabel(zonesData, currentStart.zoneId),
     },
     { xAxis: previous.date },
   ]);

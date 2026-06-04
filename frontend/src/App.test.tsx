@@ -11,6 +11,7 @@ import App, { SourceMetadataView } from './App';
 vi.mock('axios', () => ({
   default: {
     get: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -94,6 +95,7 @@ describe('App Component', () => {
     cleanup();
     vi.restoreAllMocks();
     vi.mocked(axios.get).mockReset();
+    vi.mocked(axios.delete).mockReset();
   });
 
   it('renders the dashboard title', () => {
@@ -198,10 +200,10 @@ describe('App Component', () => {
 
     await waitFor(() => expect(screen.getByText('本地模拟数据')).toBeDefined());
     expect(vi.mocked(axios.get)).toHaveBeenNthCalledWith(2, '/api/stocks/600519/history', expect.objectContaining({
-      params: expect.objectContaining({ allowMockFallback: true }),
+      params: expect.objectContaining({ allowMockFallback: true, cacheTtlHours: 24 }),
     }));
     expect(vi.mocked(axios.get)).toHaveBeenNthCalledWith(3, '/api/stocks/600519/dividend-yield-zones', expect.objectContaining({
-      params: expect.objectContaining({ allowMockFallback: true }),
+      params: expect.objectContaining({ allowMockFallback: true, cacheTtlHours: 24 }),
     }));
   });
 
@@ -235,6 +237,79 @@ describe('App Component', () => {
 
     await waitFor(() => expect(screen.getByText('本地模拟数据')).toBeDefined());
     expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it('sends the default cache TTL with stock data requests', async () => {
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce(mockHistoryResponse)
+      .mockResolvedValueOnce(mockZonesResponse);
+
+    render(<App />);
+    submitDefaultQuery();
+
+    await waitFor(() => expect(screen.getByText('本地模拟数据')).toBeDefined());
+    expect(vi.mocked(axios.get)).toHaveBeenNthCalledWith(1, '/api/stocks/600519/history', expect.objectContaining({
+      params: expect.objectContaining({ cacheTtlHours: 24 }),
+    }));
+    expect(vi.mocked(axios.get)).toHaveBeenNthCalledWith(2, '/api/stocks/600519/dividend-yield-zones', expect.objectContaining({
+      params: expect.objectContaining({ cacheTtlHours: 24 }),
+    }));
+  });
+
+  it('sends the selected cache TTL with stock data requests', async () => {
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce(mockHistoryResponse)
+      .mockResolvedValueOnce(mockZonesResponse);
+
+    render(<App />);
+    fireEvent.click(screen.getByText('高级选项'));
+    fireEvent.change(screen.getByLabelText('缓存有效期'), { target: { value: '2' } });
+    submitDefaultQuery();
+
+    await waitFor(() => expect(screen.getByText('本地模拟数据')).toBeDefined());
+    expect(vi.mocked(axios.get)).toHaveBeenNthCalledWith(1, '/api/stocks/600519/history', expect.objectContaining({
+      params: expect.objectContaining({ cacheTtlHours: 2 }),
+    }));
+  });
+
+  it('confirms before clearing local stock cache and shows success feedback', async () => {
+    vi.mocked(axios.delete).mockResolvedValueOnce({
+      data: { success: true, message: 'Stock data cache cleared successfully.' },
+    });
+    const messageSpy = vi.spyOn(message, 'success').mockImplementation(() => undefined as any);
+    let confirmOptions: any;
+    vi.spyOn(Modal, 'confirm').mockImplementation(options => {
+      confirmOptions = options;
+      return { destroy: vi.fn(), update: vi.fn() } as any;
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByText('清除本地缓存'));
+
+    expect(confirmOptions).toEqual(expect.objectContaining({
+      title: '清除本地缓存',
+      okText: '清除缓存',
+    }));
+    await confirmOptions.onOk();
+
+    expect(vi.mocked(axios.delete)).toHaveBeenCalledWith('/api/cache/stocks');
+    expect(messageSpy).toHaveBeenCalledWith('本地缓存已清除。');
+  });
+
+  it('shows an error when clearing local stock cache fails', async () => {
+    vi.mocked(axios.delete).mockRejectedValueOnce(new Error('failed'));
+    const messageSpy = vi.spyOn(message, 'error').mockImplementation(() => undefined as any);
+    let confirmOptions: any;
+    vi.spyOn(Modal, 'confirm').mockImplementation(options => {
+      confirmOptions = options;
+      return { destroy: vi.fn(), update: vi.fn() } as any;
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByText('清除本地缓存'));
+    await confirmOptions.onOk();
+
+    expect(messageSpy).toHaveBeenCalledWith('清除缓存失败，请稍后重试。');
   });
 
   it('uses the existing error message path for non-provider-exhaustion history errors', async () => {
