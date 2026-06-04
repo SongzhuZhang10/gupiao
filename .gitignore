@@ -11,3 +11,4 @@ backend/cache/
 release/*
 libatomic1_14.2.0-4ubuntu2~24.04.1_amd64.deb
 graphify-out/*
+.codegraph/*
