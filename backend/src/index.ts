@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import stocksRouter from './routes/stocks';
 import cacheRouter from './routes/cache';
+import grahamRouter from './routes/graham';
 
 dotenv.config();
 
@@ -14,6 +15,7 @@ app.use(express.json());
 
 app.use('/api/stocks', stocksRouter);
 app.use('/api/cache', cacheRouter);
+app.use('/api/graham', grahamRouter);
 
 app.listen(PORT, () => {
   console.log(`Backend server running on http://localhost:${PORT}`);
