@@ -1,7 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { Form, Input, InputNumber, Button, Card, Table, Typography, Space, message, Alert, Tooltip, Row, Col } from 'antd';
-import { InfoCircleOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Form, Input, InputNumber, Button, Card, Table, Typography, Space, message, Alert, Tooltip, Row, Col, Modal } from 'antd';
+import { InfoCircleOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined, SortAscendingOutlined } from '@ant-design/icons';
 import axios from 'axios';
+import { useMarket } from '../context/MarketContext';
+import {
+  isValidStockCode,
+  stockCodeErrorForMarket,
+  stockCodePlaceholderForMarket,
+} from '../utils/stock';
+import {
+  reorderStockPoolBySortedRows,
+  sortValuationRowsByDeviationAsc,
+} from '../utils/sortGrahamPoolByDeviation';
+import { readStockPool, writeStockPool } from '../utils/grahamStockPool';
 
 const { Title, Text } = Typography;
 
@@ -39,19 +50,11 @@ const cardStyle: React.CSSProperties = {
 };
 
 export const GrahamValuation: React.FC = () => {
+  const { market } = useMarket();
   const [form] = Form.useForm<GrahamFormValues>();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ValuationRow[]>([]);
-  
-  const [stockPool, setStockPool] = useState<string[]>(() => {
-    const savedPool = localStorage.getItem('grahamStockPool');
-    if (savedPool) {
-      try {
-        return JSON.parse(savedPool);
-      } catch (e) { console.error(e); }
-    }
-    return [];
-  });
+  const [stockPool, setStockPool] = useState<string[]>(() => readStockPool(market));
 
   const [initialParams] = useState<GrahamFormValues>(() => {
     const savedParams = localStorage.getItem('grahamGlobalParams');
@@ -66,42 +69,80 @@ export const GrahamValuation: React.FC = () => {
 
   const [newStockCode, setNewStockCode] = useState('');
 
-  // 移除了引起警告的挂载时 useEffect
-  
-  // 挂载时自动拉取缓存股票池的数据
-  useEffect(() => {
-    if (stockPool.length > 0) {
-      fetchValuations(stockPool, true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const persistStockPool = useCallback(
+    (pool: string[]) => {
+      writeStockPool(market, pool);
+    },
+    [market]
+  );
+
+  const getGrahamParams = useCallback((): GrahamFormValues => {
+    return { ...initialParams, ...form.getFieldsValue() };
+  }, [form, initialParams]);
 
   useEffect(() => {
-    localStorage.setItem('grahamStockPool', JSON.stringify(stockPool));
-  }, [stockPool]);
+    const pool = readStockPool(market);
+    setStockPool(pool);
+    setData([]);
+    if (pool.length > 0) {
+      void fetchValuations(pool, { refreshPolicy: 'default', marketOverride: market });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market]);
+
+  useEffect(() => {
+    if (market !== 'us') return;
+    void axios
+      .get<{ features?: { secRoe?: boolean } }>('/api/health')
+      .then(res => {
+        if (res.data?.features?.secRoe !== true) {
+          message.warning(
+            '后端版本过旧，美股 ROE 不可用。请重启后端（npm run dev:backend）或重新 build:backend 后重启应用，再点「全部刷新」。',
+            8
+          );
+        }
+      })
+      .catch(() => {
+        /* health 不可达时由 evaluate 请求报错 */
+      });
+  }, [market]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleValuesChange = (_: any, allValues: GrahamFormValues) => {
     localStorage.setItem('grahamGlobalParams', JSON.stringify(allValues));
   };
 
-  const fetchValuations = async (codes: string[], isRefreshAll = false) => {
-    if (codes.length === 0) return;
+  const fetchValuations = async (
+    codes: string[],
+    options: {
+      isRefreshAll?: boolean;
+      refreshPolicy?: 'default' | 'fresh-prices';
+      marketOverride?: typeof market;
+    } = {}
+  ): Promise<{ ok: boolean; rows: ValuationRow[]; errorMessage?: string }> => {
+    const { isRefreshAll = false, refreshPolicy = 'default', marketOverride = market } = options;
+    if (codes.length === 0) return { ok: true, rows: [] };
     try {
       setLoading(true);
-      const params = form.getFieldsValue();
+      const params = getGrahamParams();
       const inputs = codes.map((code) => ({
         stockCode: code,
         startYear: params.startYear,
         endYear: params.endYear,
         Y: params.Y,
+        market: marketOverride,
       }));
 
-      const res = await axios.post('/api/graham/evaluate', { inputs });
-      
+      const res = await axios.post('/api/graham/evaluate', {
+        inputs,
+        refreshPolicy,
+        cacheTtlHours: 24,
+      });
+      const rows: ValuationRow[] = res.data.rows ?? [];
+
       setData(prev => {
         const newData = isRefreshAll ? [] : [...prev];
-        res.data.rows.forEach((newRow: ValuationRow) => {
+        rows.forEach((newRow: ValuationRow) => {
           const idx = newData.findIndex(r => r.stockCode === newRow.stockCode);
           if (idx !== -1) {
             newData[idx] = newRow;
@@ -112,13 +153,14 @@ export const GrahamValuation: React.FC = () => {
         return newData;
       });
       if (isRefreshAll) message.success('全部刷新完成');
+      return { ok: true, rows };
     } catch (error: unknown) {
       console.error(error);
-      if (axios.isAxiosError(error)) {
-        message.error(error.response?.data?.error || '请求失败，请检查网络');
-      } else {
-        message.error('发生了未知错误');
-      }
+      const errorMessage = axios.isAxiosError(error)
+        ? (error.response?.data?.error || '请求失败，请检查网络')
+        : '发生了未知错误';
+      message.error(errorMessage);
+      return { ok: false, rows: [], errorMessage };
     } finally {
       setLoading(false);
     }
@@ -127,43 +169,113 @@ export const GrahamValuation: React.FC = () => {
   const handleAddStock = async () => {
     const codes = newStockCode.split(',').map(s => s.trim()).filter(Boolean);
     if (!codes.length) return;
-    
-    const updatedPool = [...stockPool];
-    const addedCodes: string[] = [];
-    
-    for (const code of codes) {
-      if (!updatedPool.includes(code)) {
-        if (updatedPool.length >= 50) {
-          message.warning('股票池最多允许 50 只股票');
-          break;
-        }
-        updatedPool.push(code);
-        addedCodes.push(code);
-      }
+
+    const invalidCode = codes.find(code => !isValidStockCode(code, market));
+    if (invalidCode) {
+      message.error(stockCodeErrorForMarket(market));
+      return;
     }
     
-    if (addedCodes.length > 0) {
-      setStockPool(updatedPool);
-      setNewStockCode('');
-      await fetchValuations(addedCodes, false);
-      message.success(`已添加 ${addedCodes.join(', ')}`);
-    } else {
+    const normalizedCodes = codes.map(code =>
+      market === 'us' ? code.trim().toUpperCase() : code.trim()
+    );
+    const duplicateCodes = normalizedCodes.filter(code => stockPool.includes(code));
+    if (duplicateCodes.length === normalizedCodes.length) {
       message.info('该股票已在池中或输入无效');
       setNewStockCode('');
+      return;
+    }
+
+    const pendingCodes = normalizedCodes.filter(code => !stockPool.includes(code));
+    if (stockPool.length + pendingCodes.length > 50) {
+      message.warning('股票池最多允许 50 只股票');
+      return;
+    }
+
+    const result = await fetchValuations(pendingCodes, { refreshPolicy: 'default' });
+    if (!result.ok) {
+      return;
+    }
+
+    const succeeded = result.rows.filter(row => row.status === 'OK' || row.status === 'WARNING');
+    const failed = result.rows.filter(row => row.status === 'ERROR');
+
+    if (succeeded.length > 0) {
+      const addedCodes = succeeded.map(row => row.stockCode);
+      setStockPool(prev => {
+        const next = [...prev, ...addedCodes];
+        persistStockPool(next);
+        return next;
+      });
+      setNewStockCode('');
+      message.success(`已添加 ${addedCodes.join(', ')}`);
+    }
+
+    if (failed.length > 0) {
+      message.error(failed.map(row => `${row.stockCode}: ${row.message}`).join('；'));
+    } else if (succeeded.length === 0) {
+      message.error('未能获取有效估值数据，股票未加入股票池');
     }
   };
 
   const handleRefreshAll = () => {
-    if (stockPool.length === 0) {
+    const pool = stockPool.length > 0 ? stockPool : readStockPool(market);
+    if (pool.length === 0) {
       message.info('请先添加股票');
       return;
     }
-    fetchValuations(stockPool, true);
+    if (stockPool.length === 0 && pool.length > 0) {
+      setStockPool(pool);
+    }
+    void fetchValuations(pool, { isRefreshAll: true, refreshPolicy: 'fresh-prices' });
+  };
+
+  const clearLocalCache = () => {
+    Modal.confirm({
+      title: '清除本地缓存',
+      content: '确定要删除后端本地股票数据缓存吗？格雷厄姆估值的历史 EPS/ROE 与行情缓存都将被清除，之后将重新请求外部数据源。',
+      okText: '清除缓存',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await axios.delete('/api/cache/stocks');
+          message.success('本地缓存已清除。');
+        } catch (error) {
+          console.error(error);
+          message.error('清除缓存失败，请稍后重试。');
+        }
+      },
+    });
   };
 
   const handleRemoveStock = (code: string) => {
-    setStockPool(prev => prev.filter(c => c !== code));
+    setStockPool(prev => {
+      const next = prev.filter(c => c !== code);
+      persistStockPool(next);
+      return next;
+    });
     setData(prev => prev.filter(r => r.stockCode !== code));
+  };
+
+  const handleSortByDeviation = () => {
+    if (data.length < 2) {
+      message.info('至少需要 2 只股票才能排序');
+      return;
+    }
+    const sortableCount = data.filter(row => row.priceDeviationPercent != null).length;
+    if (sortableCount < 2) {
+      message.info('至少需要 2 只有效偏离率的股票才能排序');
+      return;
+    }
+    const sortedRows = sortValuationRowsByDeviationAsc(data);
+    setData(sortedRows);
+    setStockPool(prev => {
+      const next = reorderStockPoolBySortedRows(prev, sortedRows);
+      persistStockPool(next);
+      return next;
+    });
+    message.success('已按偏离率从小到大排序');
   };
 
   const columns = [
@@ -196,13 +308,13 @@ export const GrahamValuation: React.FC = () => {
       ), 
       dataIndex: 'R', 
       key: 'R', 
-      render: (v: number) => v != null ? `${v.toFixed(0)}%` : '-' 
+      render: (v: number) => v != null ? v.toFixed(0) : '-' 
     },
     { 
       title: (
         <Space size="small">
           格雷厄姆股价
-          <Tooltip title="公式内在价值 V = E × (8.5 + 2R) × (4.4 ÷ Y)"><InfoCircleOutlined style={{ color: '#94a3b8' }} /></Tooltip>
+          <Tooltip title="公式内在价值 V = E × (8.5 + 2R) × (3.6 ÷ Y)"><InfoCircleOutlined style={{ color: '#94a3b8' }} /></Tooltip>
         </Space>
       ), 
       dataIndex: 'grahamPrice', 
@@ -270,7 +382,14 @@ export const GrahamValuation: React.FC = () => {
                 <Col span={8}>
                   <Form.Item
                     name="startYear"
-                    label="开始年份"
+                    label={
+                      <Space size="small">
+                        开始年份
+                        <Tooltip title="年报报告期日历年，A 股与美股语义一致。">
+                          <InfoCircleOutlined style={{ color: '#94a3b8' }} />
+                        </Tooltip>
+                      </Space>
+                    }
                     rules={[{ required: true, message: '必填' }]}
                     style={{ marginBottom: 0 }}
                   >
@@ -280,7 +399,14 @@ export const GrahamValuation: React.FC = () => {
                 <Col span={8}>
                   <Form.Item
                     name="endYear"
-                    label="结束年份"
+                    label={
+                      <Space size="small">
+                        结束年份
+                        <Tooltip title="年报报告期日历年，A 股与美股语义一致；末年扣非 EPS 取自该年。">
+                          <InfoCircleOutlined style={{ color: '#94a3b8' }} />
+                        </Tooltip>
+                      </Space>
+                    }
                     rules={[{ required: true, message: '必填' }]}
                     style={{ marginBottom: 0 }}
                   >
@@ -320,7 +446,7 @@ export const GrahamValuation: React.FC = () => {
               <Space.Compact style={{ width: '100%' }}>
                 <Input 
                   size="large"
-                  placeholder="输入股票代码，如 600519，支持逗号分隔" 
+                  placeholder={`输入股票代码，${stockCodePlaceholderForMarket(market)}，支持逗号分隔`}
                   value={newStockCode}
                   onChange={e => setNewStockCode(e.target.value)}
                   onPressEnter={handleAddStock}
@@ -339,19 +465,29 @@ export const GrahamValuation: React.FC = () => {
               >
                 根据左侧参数，一键重新计算所有股票
               </Button>
+              <Button danger onClick={clearLocalCache}>
+                清除本地缓存
+              </Button>
             </div>
           </Card>
         </Col>
       </Row>
 
       <Card style={cardStyle}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 20, gap: 16, flexWrap: 'wrap' }}>
           <div>
-            <Title level={4} style={{ margin: '0 0 4px 0' }}>我的股票池 ({data.length}/50)</Title>
+            <Title level={4} style={{ margin: '0 0 4px 0' }}>我的股票池 ({stockPool.length}/50)</Title>
             <Text type="secondary" style={{ fontSize: '13px' }}>
               偏离率 = (当前股价 - 格雷厄姆股价) / 当前股价。正数代表当前股价偏高（红色），负数代表偏低（绿色）。
             </Text>
           </div>
+          <Button
+            icon={<SortAscendingOutlined />}
+            onClick={handleSortByDeviation}
+            disabled={data.length < 2 || loading}
+          >
+            按偏离率排序
+          </Button>
         </div>
         <Table 
           dataSource={data} 
