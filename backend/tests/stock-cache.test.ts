@@ -5,6 +5,7 @@ import {
   cacheTtlMsFromHours,
   clearStockDataCache,
   DEFAULT_CACHE_TTL_MS,
+  withDataCache,
   withStockCache,
 } from '../src/services/stockCache';
 
@@ -43,10 +44,12 @@ const baseParams = {
 
 describe('stock filesystem cache', () => {
   beforeEach(async () => {
+    process.env.GUPAO_CACHE_DIR = testCacheDir;
     await fs.rm(testCacheDir, { recursive: true, force: true });
   });
 
   afterEach(async () => {
+    delete process.env.GUPAO_CACHE_DIR;
     vi.restoreAllMocks();
     await fs.rm(testCacheDir, { recursive: true, force: true });
   });
@@ -208,5 +211,65 @@ describe('stock filesystem cache', () => {
     await expect(fs.readdir(testCacheDir)).resolves.toEqual([]);
     await fs.rm(testCacheDir, { recursive: true, force: true });
     await expect(clearStockDataCache()).resolves.toBeUndefined();
+  });
+});
+
+describe('withDataCache', () => {
+  beforeEach(async () => {
+    process.env.GUPAO_CACHE_DIR = testCacheDir;
+    await fs.rm(testCacheDir, { recursive: true, force: true });
+  });
+
+  afterEach(async () => {
+    delete process.env.GUPAO_CACHE_DIR;
+    vi.restoreAllMocks();
+    await fs.rm(testCacheDir, { recursive: true, force: true });
+  });
+
+  it('returns permanent cache without refetching even after TTL would expire', async () => {
+    const fetchFresh = vi.fn()
+      .mockResolvedValueOnce({ value: 'first' })
+      .mockResolvedValueOnce({ value: 'second' });
+
+    const first = await withDataCache({
+      dataType: 'generic-permanent',
+      params: { id: 'a' },
+      permanent: true,
+      fetchFresh,
+    });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const second = await withDataCache({
+      dataType: 'generic-permanent',
+      params: { id: 'a' },
+      permanent: true,
+      fetchFresh,
+    });
+
+    expect(first.value).toBe('first');
+    expect(second.value).toBe('first');
+    expect(fetchFresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches permanent cache when forceRefresh is true', async () => {
+    const fetchFresh = vi.fn()
+      .mockResolvedValueOnce({ value: 'first' })
+      .mockResolvedValueOnce({ value: 'second' });
+
+    await withDataCache({
+      dataType: 'generic-permanent',
+      params: { id: 'b' },
+      permanent: true,
+      fetchFresh,
+    });
+    const forced = await withDataCache({
+      dataType: 'generic-permanent',
+      params: { id: 'b' },
+      permanent: true,
+      forceRefresh: true,
+      fetchFresh,
+    });
+
+    expect(forced.value).toBe('second');
+    expect(fetchFresh).toHaveBeenCalledTimes(2);
   });
 });

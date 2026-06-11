@@ -8,6 +8,8 @@ export const STALE_CACHE_WARNING = '外部数据源不可用，已返回过期�
 
 type CacheParamValue = string | number | boolean | null | undefined;
 
+export type { CacheParamValue };
+
 export interface StockCacheableResult {
   dataSource: string;
   warnings: string[];
@@ -23,6 +25,16 @@ export interface StockCacheOptions<T extends StockCacheableResult> {
   fetchFresh: () => Promise<T>;
 }
 
+export interface DataCacheOptions<T> {
+  dataType: string;
+  params: Record<string, CacheParamValue>;
+  ttlMs?: number;
+  permanent?: boolean;
+  forceRefresh?: boolean;
+  fetchFresh: () => Promise<T>;
+  shouldWrite?: (value: T) => boolean;
+}
+
 interface CachePayload<T> {
   cachedAt: string;
   value: T;
@@ -33,7 +45,13 @@ interface CacheReadResult<T> {
   fresh: boolean;
 }
 
-const cacheDir = path.join(os.homedir(), '.gupiao', 'cache');
+export function resolveCacheDir(): string {
+  return process.env.GUPAO_CACHE_DIR ?? path.join(os.homedir(), '.gupiao', 'cache');
+}
+
+function cacheDir(): string {
+  return resolveCacheDir();
+}
 
 export function cacheTtlMsFromHours(value: unknown): number {
   if (value === undefined || value === null || value === '') return DEFAULT_CACHE_TTL_MS;
@@ -57,7 +75,7 @@ function cachePathFor(dataType: string, params: Record<string, CacheParamValue>)
     .createHash('sha256')
     .update(JSON.stringify({ dataType, params: stableParams(params) }))
     .digest('hex');
-  return path.join(cacheDir, `${dataType}-${hash}.json`);
+  return path.join(cacheDir(), `${dataType}-${hash}.json`);
 }
 
 async function readCache<T>(filePath: string, ttlMs: number): Promise<CacheReadResult<T> | null> {
@@ -80,10 +98,9 @@ function shouldWriteCache(result: StockCacheableResult): boolean {
   return result.dataSource !== 'mock' && result.sourceMetadata?.logical_source !== 'mock';
 }
 
-async function writeCache<T extends StockCacheableResult>(filePath: string, value: T): Promise<void> {
-  if (!shouldWriteCache(value)) return;
+async function writeCachePayload<T>(filePath: string, value: T): Promise<void> {
   try {
-    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.mkdir(cacheDir(), { recursive: true });
     const payload: CachePayload<T> = {
       cachedAt: new Date().toISOString(),
       value,
@@ -92,6 +109,11 @@ async function writeCache<T extends StockCacheableResult>(filePath: string, valu
   } catch (error) {
     console.warn('[StockCache] Failed to write cache', error);
   }
+}
+
+async function writeCache<T extends StockCacheableResult>(filePath: string, value: T): Promise<void> {
+  if (!shouldWriteCache(value)) return;
+  await writeCachePayload(filePath, value);
 }
 
 export async function withStockCache<T extends StockCacheableResult>({
@@ -119,7 +141,30 @@ export async function withStockCache<T extends StockCacheableResult>({
   }
 }
 
+export async function withDataCache<T>({
+  dataType,
+  params,
+  ttlMs = DEFAULT_CACHE_TTL_MS,
+  permanent = false,
+  forceRefresh = false,
+  fetchFresh,
+  shouldWrite,
+}: DataCacheOptions<T>): Promise<T> {
+  const filePath = cachePathFor(dataType, params);
+  const cached = await readCache<T>(filePath, ttlMs);
+  if (!forceRefresh && cached && (permanent || cached.fresh)) {
+    return cached.value;
+  }
+
+  const fresh = await fetchFresh();
+  const write = shouldWrite ? shouldWrite(fresh) : true;
+  if (write) {
+    await writeCachePayload(filePath, fresh);
+  }
+  return fresh;
+}
+
 export async function clearStockDataCache(): Promise<void> {
-  await fs.rm(cacheDir, { recursive: true, force: true });
-  await fs.mkdir(cacheDir, { recursive: true });
+  await fs.rm(cacheDir(), { recursive: true, force: true });
+  await fs.mkdir(cacheDir(), { recursive: true });
 }
