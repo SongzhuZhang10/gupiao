@@ -8,8 +8,11 @@ import {
   withDataCache,
   withStockCache,
 } from '../src/services/stockCache';
-
-const testCacheDir = path.resolve(__dirname, '../cache');
+import {
+  getIsolatedCacheDir,
+  setupIsolatedCacheDir,
+  teardownIsolatedCacheDir,
+} from './isolatedCacheDir';
 
 function metadata(logicalSource: 'baostock' | 'cninfo' | 'mock' = 'baostock') {
   return {
@@ -42,17 +45,14 @@ const baseParams = {
   dividendMode: 'dv_ttm',
 };
 
-describe('stock filesystem cache', () => {
-  beforeEach(async () => {
-    process.env.GUPAO_CACHE_DIR = testCacheDir;
-    await fs.rm(testCacheDir, { recursive: true, force: true });
-  });
+beforeEach(setupIsolatedCacheDir);
 
-  afterEach(async () => {
-    delete process.env.GUPAO_CACHE_DIR;
-    vi.restoreAllMocks();
-    await fs.rm(testCacheDir, { recursive: true, force: true });
-  });
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await teardownIsolatedCacheDir();
+});
+
+describe('stock filesystem cache', () => {
 
   it('uses 24 hours as the default TTL and parses GUI hours', () => {
     expect(DEFAULT_CACHE_TTL_MS).toBe(24 * 60 * 60 * 1000);
@@ -128,8 +128,9 @@ describe('stock filesystem cache', () => {
     expect(expired.dataSource).toBe('cninfo');
     expect(freshAfterExpiry).toHaveBeenCalledTimes(2);
 
-    const files = await fs.readdir(testCacheDir);
-    await fs.writeFile(path.join(testCacheDir, files[0]), '{not-json', 'utf8');
+    const cacheDirPath = getIsolatedCacheDir();
+    const files = await fs.readdir(cacheDirPath);
+    await fs.writeFile(path.join(cacheDirPath, files[0]), '{not-json', 'utf8');
     const freshAfterCorrupt = vi.fn().mockResolvedValueOnce(result('baostock'));
 
     const recovered = await withStockCache({
@@ -204,6 +205,7 @@ describe('stock filesystem cache', () => {
   });
 
   it('clears the cache directory and treats a missing directory as success', async () => {
+    const testCacheDir = getIsolatedCacheDir();
     await fs.mkdir(testCacheDir, { recursive: true });
     await fs.writeFile(path.join(testCacheDir, 'fixture.json'), '{}', 'utf8');
 
@@ -215,16 +217,6 @@ describe('stock filesystem cache', () => {
 });
 
 describe('withDataCache', () => {
-  beforeEach(async () => {
-    process.env.GUPAO_CACHE_DIR = testCacheDir;
-    await fs.rm(testCacheDir, { recursive: true, force: true });
-  });
-
-  afterEach(async () => {
-    delete process.env.GUPAO_CACHE_DIR;
-    vi.restoreAllMocks();
-    await fs.rm(testCacheDir, { recursive: true, force: true });
-  });
 
   it('returns permanent cache without refetching even after TTL would expire', async () => {
     const fetchFresh = vi.fn()

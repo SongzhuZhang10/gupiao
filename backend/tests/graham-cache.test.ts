@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import fs from 'fs/promises';
-import path from 'path';
 import {
   cacheGrahamEpsHistory,
   cacheGrahamRoe,
@@ -13,8 +11,7 @@ import {
   GrahamStockDataProvider,
   GrahamStockSnapshot,
 } from '../src/services/grahamDataProvider';
-
-const testCacheDir = path.resolve(__dirname, '../cache');
+import { setupIsolatedCacheDir, teardownIsolatedCacheDir } from './isolatedCacheDir';
 
 const snapshot: GrahamStockSnapshot = {
   stockCode: 'AAPL',
@@ -31,17 +28,14 @@ const epsHistory: GrahamEpsRecord[] = [
 
 const roe: GrahamRoeRecord = { year: 2022, roe: 15.5 };
 
-describe('grahamDataCache', () => {
-  beforeEach(async () => {
-    process.env.GUPAO_CACHE_DIR = testCacheDir;
-    await fs.rm(testCacheDir, { recursive: true, force: true });
-  });
+beforeEach(setupIsolatedCacheDir);
 
-  afterEach(async () => {
-    delete process.env.GUPAO_CACHE_DIR;
-    await fs.rm(testCacheDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await teardownIsolatedCacheDir();
+});
+
+describe('grahamDataCache', () => {
 
   it('permanently caches EPS history and does not refetch on second call', async () => {
     const fetchFresh = vi.fn().mockResolvedValueOnce(epsHistory);
@@ -107,16 +101,6 @@ function countingProvider(): GrahamStockDataProvider & {
 }
 
 describe('CachingGrahamDataProvider', () => {
-  beforeEach(async () => {
-    process.env.GUPAO_CACHE_DIR = testCacheDir;
-    await fs.rm(testCacheDir, { recursive: true, force: true });
-  });
-
-  afterEach(async () => {
-    delete process.env.GUPAO_CACHE_DIR;
-    await fs.rm(testCacheDir, { recursive: true, force: true });
-  });
-
   it('caches EPS and ROE but refetches snapshot on fresh-prices policy', async () => {
     const inner = countingProvider();
     const provider = new CachingGrahamDataProvider(inner, 'us', {

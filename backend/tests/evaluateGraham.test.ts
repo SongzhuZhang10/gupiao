@@ -1,12 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import fs from 'fs/promises';
-import path from 'path';
 import { evaluateGrahamInputs } from '../src/services/graham/evaluateGraham';
 import { CachingGrahamDataProvider } from '../src/services/graham/cachingGrahamDataProvider';
 import * as createGrahamModule from '../src/services/graham/createGrahamDataProvider';
 import { GrahamStockDataProvider, MockGrahamDataProvider } from '../src/services/grahamDataProvider';
-
-const testCacheDir = path.resolve(__dirname, '../cache');
+import { setupIsolatedCacheDir, teardownIsolatedCacheDir } from './isolatedCacheDir';
 
 function countingProvider(): GrahamStockDataProvider & {
   counts: { snapshot: number; eps: number; roe: number };
@@ -108,15 +105,11 @@ describe('evaluateGrahamInputs', () => {
   });
 
   describe('cache integration', () => {
-    beforeEach(async () => {
-      process.env.GUPAO_CACHE_DIR = testCacheDir;
-      await fs.rm(testCacheDir, { recursive: true, force: true });
-    });
+    beforeEach(setupIsolatedCacheDir);
 
     afterEach(async () => {
-      delete process.env.GUPAO_CACHE_DIR;
-      await fs.rm(testCacheDir, { recursive: true, force: true });
       vi.restoreAllMocks();
+      await teardownIsolatedCacheDir();
     });
 
     it('fresh-prices policy refetches snapshot but not EPS/ROE on second evaluate call', async () => {
