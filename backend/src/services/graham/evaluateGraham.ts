@@ -6,6 +6,7 @@ import {
   computeGrahamPrice,
   computePriceDeviation,
   roundEpsToTwoDecimals,
+  DEFAULT_R_GROWTH_COEFF,
 } from '../../utils/grahamValuation';
 import {
   isValidStockCode,
@@ -53,8 +54,9 @@ export async function evaluateGrahamInputs(
     let priceDeviationPercent: number | undefined;
     let grahamPriceR3: number | undefined;
     let grahamPriceR5: number | undefined;
-    let grahamPriceR7: number | undefined;
+    let grahamPriceR0: number | undefined;
     let roeLatest: number | undefined;
+    let bvps: number | undefined;
 
     const asOfDate = new Date().toISOString().split('T')[0];
     const market = parseMarketRegion(rawInput.market);
@@ -97,6 +99,23 @@ export async function evaluateGrahamInputs(
         message = roeError instanceof Error ? roeError.message : 'ROE 暂不可用';
       }
 
+      try {
+        const bvpsHistory = await dataProvider.getBvpsHistory(
+          input.stockCode,
+          input.startYear,
+          input.endYear
+        );
+        const endBvpsRecord = bvpsHistory.find(record => record.year === input.endYear);
+        if (!endBvpsRecord) {
+          throw new Error(`缺少 ${input.endYear} 年 BVPS 数据`);
+        }
+        bvps = roundEpsToTwoDecimals(endBvpsRecord.bvps);
+      } catch (bvpsError: unknown) {
+        status = 'WARNING';
+        const bvpsMessage = bvpsError instanceof Error ? bvpsError.message : 'BVPS 暂不可用';
+        message = message ? `${message}；${bvpsMessage}` : bvpsMessage;
+      }
+
       const startEpsRecord = epsHistory.find(r => r.year === input.startYear);
       const endEpsRecord = epsHistory.find(r => r.year === input.endYear);
 
@@ -123,12 +142,13 @@ export async function evaluateGrahamInputs(
       R = computeCagrRFromRoundedEps(startEPS, endEPS, n);
 
       const E = endEPS;
-      grahamPrice = computeGrahamPrice(E, R, input.Y);
+      const rGrowthCoeff = input.rGrowthCoeff ?? DEFAULT_R_GROWTH_COEFF;
+      grahamPrice = computeGrahamPrice(E, R, input.Y, rGrowthCoeff);
       priceDeviationPercent = computePriceDeviation(snapshot.currentPrice, grahamPrice);
 
-      grahamPriceR3 = computeGrahamPrice(E, 3, input.Y);
-      grahamPriceR5 = computeGrahamPrice(E, 5, input.Y);
-      grahamPriceR7 = computeGrahamPrice(E, 7, input.Y);
+      grahamPriceR0 = computeGrahamPrice(E, 0, input.Y, rGrowthCoeff);
+      grahamPriceR3 = computeGrahamPrice(E, 3, input.Y, rGrowthCoeff);
+      grahamPriceR5 = computeGrahamPrice(E, 5, input.Y, rGrowthCoeff);
 
       if (R < 0 || R > 17) {
         status = 'WARNING';
@@ -148,10 +168,11 @@ export async function evaluateGrahamInputs(
       R,
       grahamPrice,
       priceDeviationPercent,
+      grahamPriceR0,
       grahamPriceR3,
       grahamPriceR5,
-      grahamPriceR7,
       roeLatest,
+      bvps,
       status,
       message,
     } as ValuationRow);

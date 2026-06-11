@@ -6,9 +6,9 @@ import { GrahamStockDataProvider, MockGrahamDataProvider } from '../src/services
 import { setupIsolatedCacheDir, teardownIsolatedCacheDir } from './isolatedCacheDir';
 
 function countingProvider(): GrahamStockDataProvider & {
-  counts: { snapshot: number; eps: number; roe: number };
+  counts: { snapshot: number; eps: number; bvps: number; roe: number };
 } {
-  const counts = { snapshot: 0, eps: 0, roe: 0 };
+  const counts = { snapshot: 0, eps: 0, bvps: 0, roe: 0 };
   return {
     counts,
     async getStockSnapshot(stockCode) {
@@ -21,6 +21,15 @@ function countingProvider(): GrahamStockDataProvider & {
         { year: 2020, adjustedEps: 1 },
         { year: 2021, adjustedEps: 1.1 },
         { year: 2022, adjustedEps: 1.21 },
+      ];
+      return rows.filter(r => r.year >= startYear && r.year <= endYear);
+    },
+    async getBvpsHistory(stockCode, startYear, endYear) {
+      counts.bvps += 1;
+      const rows = [
+        { year: 2020, bvps: 8 },
+        { year: 2021, bvps: 8.5 },
+        { year: 2022, bvps: 9.2 },
       ];
       return rows.filter(r => r.year >= startYear && r.year <= endYear);
     },
@@ -41,6 +50,7 @@ describe('evaluateGrahamInputs', () => {
         priceAsOfDate: '2026-06-10',
       }),
       getAdjustedEpsHistory: async () => [{ year: 2024, adjustedEps: 2 }],
+      getBvpsHistory: async () => [{ year: 2024, bvps: 20 }],
       getLatestRoe: async () => ({ year: 2024, roe: 12 }),
     };
 
@@ -62,6 +72,7 @@ describe('evaluateGrahamInputs', () => {
 
     expect(rows[0].status).toBe('OK');
     expect(rows[0].grahamPrice).toBeGreaterThan(0);
+    expect(rows[0].bvps).toBeGreaterThan(0);
   });
 
   it('produces identical R and grahamPrice for cn and us when provider data matches', async () => {
@@ -77,6 +88,14 @@ describe('evaluateGrahamInputs', () => {
           { year: 2020, adjustedEps: 1.0 },
           { year: 2021, adjustedEps: 1.1 },
           { year: 2022, adjustedEps: 1.21 },
+        ];
+        return history.filter(row => row.year >= startYear && row.year <= endYear);
+      },
+      getBvpsHistory: async (_code, startYear, endYear) => {
+        const history = [
+          { year: 2020, bvps: 12 },
+          { year: 2021, bvps: 12.5 },
+          { year: 2022, bvps: 13.1 },
         ];
         return history.filter(row => row.year >= startYear && row.year <= endYear);
       },
@@ -102,6 +121,28 @@ describe('evaluateGrahamInputs', () => {
     expect(cnRows[0].status).toBe('WARNING');
     expect(usRows[0].status).toBe('WARNING');
     expect(cnRows[0].message).toBe('ROE 暂不可用');
+    expect(cnRows[0].bvps).toBe(13.1);
+  });
+
+  it('returns grahamPriceR0 instead of grahamPriceR7', async () => {
+    const rows = await evaluateGrahamInputs(
+      [{ stockCode: 'AAPL', startYear: 2020, endYear: 2022, Y: 1.71, market: 'us' }],
+      () => new MockGrahamDataProvider()
+    );
+    expect(rows[0].grahamPriceR0).toBeGreaterThan(0);
+    expect(rows[0]).not.toHaveProperty('grahamPriceR7');
+  });
+
+  it('respects custom rGrowthCoeff in evaluation', async () => {
+    const defaultRows = await evaluateGrahamInputs(
+      [{ stockCode: 'AAPL', startYear: 2020, endYear: 2022, Y: 1.71, market: 'us' }],
+      () => new MockGrahamDataProvider()
+    );
+    const customRows = await evaluateGrahamInputs(
+      [{ stockCode: 'AAPL', startYear: 2020, endYear: 2022, Y: 1.71, rGrowthCoeff: 3, market: 'us' }],
+      () => new MockGrahamDataProvider()
+    );
+    expect(customRows[0].grahamPrice).toBeGreaterThan(defaultRows[0].grahamPrice!);
   });
 
   describe('cache integration', () => {
@@ -122,10 +163,11 @@ describe('evaluateGrahamInputs', () => {
       const input = { stockCode: 'AAPL', startYear: 2020, endYear: 2022, Y: 1.71, market: 'us' as const };
 
       await evaluateGrahamInputs([input], undefined, { refreshPolicy: 'default' });
-      expect(inner.counts).toEqual({ snapshot: 1, eps: 1, roe: 1 });
+      expect(inner.counts).toEqual({ snapshot: 1, eps: 1, bvps: 1, roe: 1 });
 
       await evaluateGrahamInputs([input], undefined, { refreshPolicy: 'fresh-prices' });
       expect(inner.counts.eps).toBe(1);
+      expect(inner.counts.bvps).toBe(1);
       expect(inner.counts.roe).toBe(1);
       expect(inner.counts.snapshot).toBe(2);
     });
