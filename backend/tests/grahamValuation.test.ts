@@ -1,26 +1,35 @@
 import {
   computeGrahamPrice,
   computeCagrR,
+  computeCagrRFromRoundedEps,
   computePriceDeviation,
-  validateInput
+  roundEpsToTwoDecimals,
+  validateInput,
+  DEFAULT_R_GROWTH_COEFF,
 } from '../src/utils/grahamValuation';
 import { MockGrahamDataProvider } from '../src/services/grahamDataProvider';
 import { describe, it, expect } from 'vitest';
 
 describe('Graham Valuation Pure Functions', () => {
-  it('computeGrahamPrice_basic', () => {
+  it('computeGrahamPrice_basic with new base 5 and default coeff 2', () => {
     const V = computeGrahamPrice(2, 5, 2);
-    expect(V).toBeCloseTo(81.40, 2);
+    expect(V).toBeCloseTo(54, 2);
+    expect(DEFAULT_R_GROWTH_COEFF).toBe(2);
   });
 
   it('computeGrahamPrice_R3', () => {
     const V = computeGrahamPrice(2, 3, 2);
-    expect(V).toBeCloseTo(63.80, 2);
+    expect(V).toBeCloseTo(39.6, 2);
   });
 
-  it('computeGrahamPrice_R7', () => {
-    const V = computeGrahamPrice(2, 7, 2);
-    expect(V).toBeCloseTo(99.00, 2);
+  it('computeGrahamPrice_R0', () => {
+    const V = computeGrahamPrice(2, 0, 2);
+    expect(V).toBeCloseTo(18, 2);
+  });
+
+  it('computeGrahamPrice_custom_rGrowthCoeff', () => {
+    const V = computeGrahamPrice(2, 5, 2, 3);
+    expect(V).toBeCloseTo(72, 2);
   });
 
   it('computeCagrR_basic', () => {
@@ -28,9 +37,35 @@ describe('Graham Valuation Pure Functions', () => {
     expect(R).toBeCloseTo(10.00, 2);
   });
 
+  it('roundEpsToTwoDecimals uses standard rounding', () => {
+    expect(roundEpsToTwoDecimals(0.174)).toBe(0.17);
+    expect(roundEpsToTwoDecimals(2.946)).toBe(2.95);
+  });
+
+  it('computeCagrRFromRoundedEps matches NVDA-style manual verification', () => {
+    const R = computeCagrRFromRoundedEps(1.19, 4.9, 2);
+    expect(R).toBeCloseTo(102.92, 1);
+  });
+
+  it('computeGrahamPrice uses rounded E consistently with rounded R inputs', () => {
+    const startEPS = roundEpsToTwoDecimals(1.19);
+    const endEPS = roundEpsToTwoDecimals(4.9);
+    const R = computeCagrRFromRoundedEps(startEPS, endEPS, 2);
+    const price = computeGrahamPrice(endEPS, R, 1.71);
+    expect(startEPS).toBe(1.19);
+    expect(endEPS).toBe(4.9);
+    expect(price).toBeCloseTo(2175.08, 0);
+  });
+
   it('computePriceDeviation_basic', () => {
-    const dev = computePriceDeviation(100, 81.40);
-    expect(dev).toBeCloseTo(18.60, 2);
+    const dev = computePriceDeviation(100, 54);
+    expect(dev).toBeCloseTo(46, 2);
+  });
+
+  it('reject_invalid_rGrowthCoeff', () => {
+    expect(() =>
+      validateInput({ stockCode: '600519', startYear: 2019, endYear: 2024, Y: 2, rGrowthCoeff: 0 })
+    ).toThrow('R 增长系数必须大于 0');
   });
 
   it('reject_zero_Y', () => {
