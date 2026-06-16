@@ -232,6 +232,35 @@ describe('GrahamValuation cache UX', () => {
     expect(stored.stockCode).toBe(132);
   });
 
+  it('does not persist stock pool table column width after resize cancellation', async () => {
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '贵州茅台',
+            currentPrice: 1500,
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '2026-06-10',
+            status: 'OK',
+            message: '',
+          },
+        ],
+      },
+    });
+
+    render(<GrahamValuation />);
+
+    const handle = await screen.findByLabelText('调整 代码 列宽');
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 });
+    fireEvent.pointerCancel(window, { pointerId: 1 });
+    fireEvent.pointerMove(window, { clientX: 180, pointerId: 1 });
+
+    const stored = JSON.parse(localStorage.getItem('grahamPoolTableColumnWidths') || '{}') as Record<string, number>;
+    expect(stored.stockCode).toBeUndefined();
+  });
+
   it('shows table rows for stock pool codes even when valuation data is empty', async () => {
     marketState.market = 'us';
     stockPoolState.pool = ['AAPL', 'NVDA'];

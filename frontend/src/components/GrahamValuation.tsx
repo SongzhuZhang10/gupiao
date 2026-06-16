@@ -192,6 +192,8 @@ const ResizableHeaderCell: React.FC<ResizableHeaderCellProps> = ({
     const cleanup = () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+      window.removeEventListener('blur', handleWindowBlur);
       cleanupDragRef.current = null;
     };
     const handlePointerMove = (moveEvent: PointerEvent) => {
@@ -200,11 +202,19 @@ const ResizableHeaderCell: React.FC<ResizableHeaderCellProps> = ({
     const handlePointerUp = () => {
       cleanup();
     };
+    const handlePointerCancel = () => {
+      cleanup();
+    };
+    const handleWindowBlur = () => {
+      cleanup();
+    };
 
     cleanupDragRef.current?.();
     cleanupDragRef.current = cleanup;
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+    window.addEventListener('blur', handleWindowBlur);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLSpanElement>) => {
