@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resetProviderHealthForTest } from '../src/services/providers/providerHealth';
 import { createFallbackManager } from '../src/services/providers/fallbackManager';
 import { DEFAULT_PROVIDER_CONFIG } from '../src/services/providers/config';
 import {
@@ -75,6 +76,10 @@ function dividendEvent(source: string, rank: number, cash = 1): DividendEventRec
 }
 
 describe('provider fallback manager', () => {
+  afterEach(() => {
+    resetProviderHealthForTest();
+  });
+
   it('uses configured priority order for daily bars', async () => {
     const calls: string[] = [];
     const manager = createFallbackManager(
@@ -92,14 +97,59 @@ describe('provider fallback manager', () => {
           }),
         }),
       ],
-      baseConfig
+      {
+        ...baseConfig,
+        priorities: {
+          ...baseConfig.priorities,
+          daily_bars: ['baostock', 'eastmoney'],
+        },
+      }
     );
 
     const result = await manager.getDailyBars('600519.SH', '2024-01-01', '2024-01-31');
 
     expect(result.sourceMetadata.logical_source).toBe('baostock');
     expect(result.sourceMetadata.fallback_used).toBe(false);
-    expect(calls).toEqual(['baostock']);
+    expect(calls).toContain('baostock');
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('races providers in parallel and picks highest-priority success', async () => {
+    const manager = createFallbackManager(
+      [
+        provider('baostock', {
+          getDailyBars: vi.fn(async () => {
+            throw new Error('timeout of 5000ms exceeded');
+          }),
+        }),
+        provider('eastmoney', {
+          getDailyBars: vi.fn(async () => {
+            await new Promise(resolve => setTimeout(resolve, 5));
+            return [dailyBar('eastmoney', 2)];
+          }),
+        }),
+        provider('sohu', {
+          getDailyBars: vi.fn(async () => {
+            await new Promise(resolve => setTimeout(resolve, 30));
+            return [dailyBar('sohu', 3)];
+          }),
+        }),
+      ],
+      {
+        ...baseConfig,
+        priorities: {
+          ...baseConfig.priorities,
+          daily_bars: ['baostock', 'eastmoney', 'sohu'],
+        },
+      }
+    );
+
+    const started = Date.now();
+    const result = await manager.getDailyBars('600519.SH', '2024-01-01', '2024-01-31');
+    const elapsed = Date.now() - started;
+
+    expect(result.sourceMetadata.logical_source).toBe('eastmoney');
+    expect(elapsed).toBeLessThan(25);
   });
 
   it('falls back when primary provider throws', async () => {
@@ -114,15 +164,21 @@ describe('provider fallback manager', () => {
           getDailyBars: vi.fn(async () => [dailyBar('eastmoney', 2)]),
         }),
       ],
-      baseConfig
+      {
+        ...baseConfig,
+        priorities: {
+          ...baseConfig.priorities,
+          daily_bars: ['baostock', 'eastmoney'],
+        },
+      }
     );
 
     const result = await manager.getDailyBars('600519.SH', '2024-01-01', '2024-01-31');
 
     expect(result.sourceMetadata.logical_source).toBe('eastmoney');
     expect(result.sourceMetadata.fallback_used).toBe(true);
-    expect(result.attempts.map(a => a.provider)).toEqual(['baostock', 'eastmoney']);
-    expect(result.attempts[0].reason).toContain('python package missing');
+    expect(result.attempts.map(a => a.provider).sort()).toEqual(['baostock', 'eastmoney']);
+    expect(result.attempts.find(a => a.provider === 'baostock')?.reason).toContain('python package missing');
   });
 
   it('falls back when primary provider returns malformed data', async () => {
@@ -135,14 +191,20 @@ describe('provider fallback manager', () => {
           getDailyBars: vi.fn(async () => [dailyBar('eastmoney', 2)]),
         }),
       ],
-      baseConfig
+      {
+        ...baseConfig,
+        priorities: {
+          ...baseConfig.priorities,
+          daily_bars: ['baostock', 'eastmoney'],
+        },
+      }
     );
 
     const result = await manager.getDailyBars('600519.SH', '2024-01-01', '2024-01-31');
 
     expect(result.sourceMetadata.logical_source).toBe('eastmoney');
-    expect(result.attempts[0].status).toBe('invalid');
-    expect(result.attempts[0].reason).toContain('open');
+    expect(result.attempts.find(a => a.provider === 'baostock')?.status).toBe('invalid');
+    expect(result.attempts.find(a => a.provider === 'baostock')?.reason).toContain('open');
   });
 
   it('reports every attempted provider when all fail', async () => {
@@ -157,7 +219,13 @@ describe('provider fallback manager', () => {
           getDailyBars: vi.fn(async () => []),
         }),
       ],
-      baseConfig
+      {
+        ...baseConfig,
+        priorities: {
+          ...baseConfig.priorities,
+          daily_bars: ['baostock', 'eastmoney'],
+        },
+      }
     );
 
     await expect(manager.getDailyBars('600519.SH', '2024-01-01', '2024-01-31')).rejects.toMatchObject({

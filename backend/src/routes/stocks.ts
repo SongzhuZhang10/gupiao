@@ -1,5 +1,10 @@
 import { Router } from 'express';
-import { A_SHARE_STOCK_CODE_ERROR, isValidAShareStockCode, normalizeStockCode } from '../utils/stock';
+import {
+  isValidStockCode,
+  normalizeStockCode,
+  parseMarketRegion,
+  stockCodeErrorForMarket,
+} from '../utils/stock';
 import { fetchCachedDividendEventsWithMeta, fetchCachedHistoricalDataWithMeta } from '../services/dataSources';
 import { sampleWeeklyData } from '../utils/sampling';
 import { ProviderFallbackError } from '../services/providers/types';
@@ -34,16 +39,17 @@ function isTrueQueryParam(value: unknown): boolean {
 router.get('/:tsCode/history', async (req, res) => {
   try {
     const rawCode = req.params.tsCode;
-    const { startDate, endDate, priceMode = 'forward', dividendMode = 'dv_ttm', allowMockFallback, cacheTtlHours } = req.query;
+    const { startDate, endDate, priceMode = 'forward', dividendMode = 'dv_ttm', allowMockFallback, cacheTtlHours, market: marketQuery, dataSourceOverride } = req.query;
+    const market = parseMarketRegion(marketQuery);
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: '开始日期和结束日期不能为空' });
     }
-    if (!isValidAShareStockCode(rawCode)) {
-      return res.status(400).json({ error: A_SHARE_STOCK_CODE_ERROR });
+    if (!isValidStockCode(rawCode, market)) {
+      return res.status(400).json({ error: stockCodeErrorForMarket(market) });
     }
 
-    const tsCode = normalizeStockCode(rawCode);
+    const tsCode = normalizeStockCode(rawCode, market);
 
     const historicalResult = await fetchCachedHistoricalDataWithMeta(
       tsCode,
@@ -51,13 +57,19 @@ router.get('/:tsCode/history', async (req, res) => {
       endDate as string,
       priceMode as string,
       dividendMode as string,
-      { allowMockFallback: isTrueQueryParam(allowMockFallback), cacheTtlMs: cacheTtlMsFromHours(cacheTtlHours) }
+      {
+        allowMockFallback: isTrueQueryParam(allowMockFallback),
+        cacheTtlMs: cacheTtlMsFromHours(cacheTtlHours),
+        market,
+        dataSourceOverride: dataSourceOverride as any,
+      }
     );
 
     const sampledData = sampleWeeklyData(historicalResult.data, dividendMode as 'dv_ratio' | 'dv_ttm');
 
     res.json({
       stockCode: tsCode,
+      market,
       startDate,
       endDate,
       dataSource: historicalResult.dataSource,
@@ -87,7 +99,8 @@ router.get('/:tsCode/history', async (req, res) => {
 router.get('/:tsCode/dividend-yield-zones', async (req, res) => {
   try {
     const rawCode = req.params.tsCode;
-    const { startDate, endDate, lookbackYears = '10', dividendBasis = 'pre_tax', allowMockFallback, cacheTtlHours } = req.query;
+    const { startDate, endDate, lookbackYears = '10', dividendBasis = 'pre_tax', allowMockFallback, cacheTtlHours, market: marketQuery, dataSourceOverride } = req.query;
+    const market = parseMarketRegion(marketQuery);
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: '开始日期和结束日期不能为空' });
@@ -110,10 +123,10 @@ router.get('/:tsCode/dividend-yield-zones', async (req, res) => {
       return res.status(400).json({ error: 'lookbackYears 必须是 5 到 10 之间的整数' });
     }
 
-    if (!isValidAShareStockCode(rawCode)) {
-      return res.status(400).json({ error: A_SHARE_STOCK_CODE_ERROR });
+    if (!isValidStockCode(rawCode, market)) {
+      return res.status(400).json({ error: stockCodeErrorForMarket(market) });
     }
-    const tsCode = normalizeStockCode(rawCode);
+    const tsCode = normalizeStockCode(rawCode, market);
 
     const chartStartDate = startDate as string;
     const chartEndDate = endDate as string;
@@ -124,6 +137,8 @@ router.get('/:tsCode/dividend-yield-zones', async (req, res) => {
     const cacheOptions = {
       allowMockFallback: isTrueQueryParam(allowMockFallback),
       cacheTtlMs: cacheTtlMsFromHours(cacheTtlHours),
+      market,
+      dataSourceOverride: dataSourceOverride as any,
     };
 
     const historicalResult = await fetchCachedHistoricalDataWithMeta(
@@ -167,8 +182,10 @@ router.get('/:tsCode/dividend-yield-zones', async (req, res) => {
 
     res.json({
       code: tsCode,
+      market,
       ...calculation,
       dataSource: historicalResult.dataSource,
+      dividendDataSource: dividendResult.dataSource,
       sourceMetadata: historicalResult.sourceMetadata,
     });
 

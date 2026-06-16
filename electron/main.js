@@ -22,12 +22,15 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  // Start the backend server
-  try {
-    require('../backend/dist/index.js');
-    console.log('Backend started successfully');
-  } catch (error) {
-    console.error('Failed to start backend:', error);
+  if (isDev) {
+    console.log('Dev mode: using backend from npm run dev:backend (http://127.0.0.1:3000)');
+  } else {
+    try {
+      require('../backend/dist/index.js');
+      console.log('Backend started successfully');
+    } catch (error) {
+      console.error('Failed to start backend:', error);
+    }
   }
 
   createWindow();

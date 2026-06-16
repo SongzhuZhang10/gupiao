@@ -10,6 +10,7 @@ import {
   ProviderName,
   SourceMetadata,
 } from './providers/types';
+import { MarketRegion } from '../utils/stock';
 import { calculateDividendYield } from './providers/validation';
 import { DEFAULT_CACHE_TTL_MS, withStockCache } from './stockCache';
 
@@ -34,10 +35,39 @@ export interface DividendEventsResult {
 interface FetchDataSourceOptions {
   allowMockFallback?: boolean;
   cacheTtlMs?: number;
+  market?: MarketRegion;
+  dataSourceOverride?: DataSourceName;
+}
+
+function cacheParamsForFetch(
+  tsCode: string,
+  startDate: string,
+  endDate: string,
+  options?: FetchDataSourceOptions,
+  extra: Record<string, string | boolean> = {}
+) {
+  return {
+    tsCode,
+    startDate,
+    endDate,
+    market: options?.market ?? 'cn',
+    dataSourceOverride: options?.dataSourceOverride ?? '',
+    allowMockFallback: options?.allowMockFallback === true,
+    ...extra,
+  };
 }
 
 function providerConfigFor(options?: FetchDataSourceOptions): ProviderConfig {
-  const config = getProviderConfig();
+  const config = { ...getProviderConfig(options?.market ?? 'cn') };
+  
+  if (options?.dataSourceOverride) {
+    config.priorities = {
+      ...config.priorities,
+      daily_bars: [options.dataSourceOverride],
+      dividend_events: [options.dataSourceOverride],
+    };
+  }
+
   if (!options?.allowMockFallback) return config;
   return {
     ...config,
@@ -69,10 +99,11 @@ async function enrichDividendYields(
   tsCode: string,
   warnings: string[],
   dividendMode: string,
-  config: ProviderConfig
+  config: ProviderConfig,
+  market: MarketRegion = 'cn'
 ): Promise<DailyBarRecord[]> {
   if (data.length === 0) return data;
-  const manager = createFallbackManager(createProviders(), config);
+  const manager = createFallbackManager(createProviders(market), config);
   let events;
   const unadjustedCloseByDate = new Map(
     unadjustedData.map(row => [row.trade_date, row.close])
@@ -131,13 +162,14 @@ export async function fetchHistoricalDataWithMeta(
   _dividendMode: string,
   options?: FetchDataSourceOptions
 ): Promise<HistoricalDataResult> {
-  console.log(`[Data Fetch] Fetching ${tsCode} ${startDate}..${endDate} with free provider fallback`);
+  const market = options?.market ?? 'cn';
+  console.log(`[Data Fetch] Fetching ${tsCode} ${startDate}..${endDate} market=${market} with free provider fallback`);
   const config = providerConfigFor(options);
-  const manager = createFallbackManager(createProviders(), config);
+  const manager = createFallbackManager(createProviders(market), config);
   const result = await manager.getDailyBars(tsCode, startDate, endDate, priceMode);
   const warnings = [...result.warnings];
   const adjustedData = applyPriceMode(result.data, priceMode);
-  const enrichedData = await enrichDividendYields(adjustedData, result.data, tsCode, warnings, _dividendMode, config);
+  const enrichedData = await enrichDividendYields(adjustedData, result.data, tsCode, warnings, _dividendMode, config, market);
   const qualityFlags = Array.from(new Set(enrichedData.flatMap(row => row.metadata.quality_flags)));
   const sourceMetadata: SourceMetadata = {
     ...result.sourceMetadata,
@@ -163,7 +195,7 @@ export async function fetchCachedHistoricalDataWithMeta(
 ): Promise<HistoricalDataResult> {
   return withStockCache({
     dataType: 'history',
-    params: { tsCode, startDate, endDate, priceMode, dividendMode },
+    params: cacheParamsForFetch(tsCode, startDate, endDate, options, { priceMode, dividendMode }),
     ttlMs: options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS,
     fetchFresh: () => fetchHistoricalDataWithMeta(tsCode, startDate, endDate, priceMode, dividendMode, options),
   });
@@ -186,8 +218,9 @@ export async function fetchDividendEventsWithMeta(
   endDate: string,
   options?: FetchDataSourceOptions
 ): Promise<DividendEventsResult> {
-  console.log(`[Data Fetch] Fetching dividend events ${tsCode} ..${endDate} with free provider fallback`);
-  const manager = createFallbackManager(createProviders(), providerConfigFor(options));
+  const market = options?.market ?? 'cn';
+  console.log(`[Data Fetch] Fetching dividend events ${tsCode} ..${endDate} market=${market} with free provider fallback`);
+  const manager = createFallbackManager(createProviders(market), providerConfigFor(options));
   const result = await manager.getDividendEvents(tsCode, startDate, endDate);
 
   return {
@@ -207,7 +240,7 @@ export async function fetchCachedDividendEventsWithMeta(
 ): Promise<DividendEventsResult> {
   return withStockCache({
     dataType: 'dividend-events',
-    params: { tsCode, startDate, endDate },
+    params: cacheParamsForFetch(tsCode, startDate ?? '', endDate, options),
     ttlMs: options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS,
     fetchFresh: () => fetchDividendEventsWithMeta(tsCode, startDate, endDate, options),
   });

@@ -1,3 +1,4 @@
+import './loadEnv';
 import { fetchHistoricalData } from './services/dataSources';
 import { sampleWeeklyData } from './utils/sampling';
 import { normalizeStockCode } from './utils/stock';

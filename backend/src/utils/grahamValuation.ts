@@ -7,12 +7,14 @@ export interface GrahamValuationInput {
   Y: number;
   rGrowthCoeff?: number;
   market?: MarketRegion;
+  dataSourceOverride?: string;
 }
 
 export interface ValuationRow {
   stockCode: string;
   stockName: string;
   currentPrice: number;
+  dataSource?: string;
   startYear: number;
   endYear: number;
   startEPS?: number;

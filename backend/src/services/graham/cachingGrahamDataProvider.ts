@@ -1,11 +1,13 @@
 import { MarketRegion } from '../../utils/stock';
 import {
+  GrahamBvpsRecord,
   GrahamEpsRecord,
   GrahamRoeRecord,
   GrahamStockDataProvider,
   GrahamStockSnapshot,
 } from '../grahamDataProvider';
 import {
+  cacheGrahamBvpsHistory,
   cacheGrahamEpsHistory,
   cacheGrahamRoe,
   cacheGrahamSnapshot,
@@ -16,6 +18,7 @@ export type GrahamRefreshPolicy = 'default' | 'fresh-prices';
 export interface GrahamCacheContext {
   refreshPolicy: GrahamRefreshPolicy;
   snapshotTtlMs: number;
+  dataSourceOverride?: string;
 }
 
 const EPS_FETCH_START_YEAR = 1990;
@@ -35,6 +38,7 @@ export class CachingGrahamDataProvider implements GrahamStockDataProvider {
       {
         ttlMs: this.cacheContext.snapshotTtlMs,
         forceRefresh: this.cacheContext.refreshPolicy === 'fresh-prices',
+        dataSourceOverride: this.cacheContext.dataSourceOverride,
       }
     );
   }
@@ -47,6 +51,18 @@ export class CachingGrahamDataProvider implements GrahamStockDataProvider {
     const fetchEndYear = new Date().getFullYear();
     const fullHistory = await cacheGrahamEpsHistory(this.market, stockCode, () =>
       this.inner.getAdjustedEpsHistory(stockCode, EPS_FETCH_START_YEAR, fetchEndYear)
+    );
+    return fullHistory.filter(row => row.year >= startYear && row.year <= endYear);
+  }
+
+  async getBvpsHistory(
+    stockCode: string,
+    startYear: number,
+    endYear: number
+  ): Promise<GrahamBvpsRecord[]> {
+    const fetchEndYear = new Date().getFullYear();
+    const fullHistory = await cacheGrahamBvpsHistory(this.market, stockCode, () =>
+      this.inner.getBvpsHistory(stockCode, EPS_FETCH_START_YEAR, fetchEndYear)
     );
     return fullHistory.filter(row => row.year >= startYear && row.year <= endYear);
   }

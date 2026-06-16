@@ -1,0 +1,24 @@
+{
+  "data": {
+    "dataTableDTOList": [
+      {
+        "code": "600519.SH",
+        "title": "贵州茅台分红",
+        "table": {
+          "headName": ["2023-06-28", "2024-06-19"],
+          "cash": [25.91, 30.876]
+        },
+        "nameMap": {
+          "headName": "除权除息日",
+          "cash": "每股税前分红"
+        },
+        "field": {
+          "returnCode": "cash",
+          "returnName": "每股税前分红",
+          "dateGranularity": "DAY"
+        },
+        "indicatorOrder": ["cash"]
+      }
+    ]
+  }
+}

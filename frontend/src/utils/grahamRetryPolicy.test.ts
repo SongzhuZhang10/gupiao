@@ -20,4 +20,17 @@ describe('grahamRetryPolicy', () => {
     ];
     expect(pickAutoRetryCodes(rows)).toEqual(['B']);
   });
+
+  it('picks multiple retryable ERROR rows', () => {
+    const rows = [
+      { stockCode: 'A', status: 'ERROR' as const, message: 'timeout' },
+      { stockCode: 'B', status: 'ERROR' as const, message: 'Network Error' },
+      { stockCode: 'C', status: 'ERROR' as const, message: 'EPS 非正' },
+    ];
+    expect(pickAutoRetryCodes(rows)).toEqual(['A', 'B']);
+  });
+
+  it('treats stale cache warning as retryable', () => {
+    expect(isRetryableGrahamError('外部数据源不可用，已返回过期本地缓存。')).toBe(true);
+  });
 });

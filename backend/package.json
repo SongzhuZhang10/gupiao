@@ -4,7 +4,13 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "vitest run"
+    "dev": "nodemon src/index.ts",
+    "start": "ts-node src/index.ts",
+    "test": "vitest run",
+    "verify": "ts-node src/debug/cli.ts verify all --skip-api",
+    "verify:live": "ts-node src/debug/cli.ts verify live",
+    "debug": "ts-node src/debug/cli.ts",
+    "cli": "ts-node src/cli.ts"
   },
   "keywords": [],
   "author": "",

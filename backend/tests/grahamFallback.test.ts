@@ -226,4 +226,48 @@ describe('Graham provider fallback', () => {
     expect(result.currentPrice).toBe(1500);
     expect(attempts).toBe(2);
   });
+
+  it('does not retry non-transient errors before falling back', async () => {
+    let attempts = 0;
+    const provider = createFallbackGrahamDataProvider(
+      [
+        namedProvider('eastmoney', {
+          getStockSnapshot: async () => {
+            attempts += 1;
+            throw new Error('缺少 2019 年扣非 EPS 数据');
+          },
+        }),
+        namedProvider('daily_bars_bridge', {
+          getStockSnapshot: async () => ({ ...snapshot, currentPrice: 1400 }),
+        }),
+      ],
+      baseConfig
+    );
+
+    const result = await provider.getStockSnapshot('600519.SH');
+    expect(result.currentPrice).toBe(1400);
+    expect(attempts).toBe(1);
+  });
+  it('falls back to next provider after transient error retries are exhausted', async () => {
+    let attempts = 0;
+    const provider = createFallbackGrahamDataProvider(
+      [
+        namedProvider('eastmoney', {
+          getStockSnapshot: async () => {
+            attempts += 1;
+            throw new Error('timeout of 8000ms exceeded');
+          },
+        }),
+        namedProvider('daily_bars_bridge', {
+          getStockSnapshot: async () => ({ ...snapshot, currentPrice: 1400 }),
+        }),
+      ],
+      baseConfig
+    );
+
+    const result = await provider.getStockSnapshot('600519.SH');
+    expect(result.currentPrice).toBe(1400);
+    // 1 initial try + 2 retries = 3 attempts before fallback
+    expect(attempts).toBe(3);
+  });
 });

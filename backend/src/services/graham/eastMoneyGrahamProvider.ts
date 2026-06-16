@@ -7,10 +7,18 @@ import {
   GrahamStockSnapshot,
 } from '../grahamDataProvider';
 import { annualReportYearFromAsOfDate } from '../../utils/annualReportYear';
-import { fetchLatestCloseFromDailyBars } from './cnClosingPrice';
+
 import { getProviderTimeoutMs } from '../providers/config';
 import { grahamProviderTimeoutMs } from './providerTimeout';
 import { eastMoneySecId, eastMoneySecuCode } from '../../utils/eastMoneySecId';
+import { resolveValidClosingPrice } from './closingPriceRules';
+import { fetchLatestCloseFromDailyBars } from './cnClosingPrice';
+import {
+  buildEastMoneyDelayQuoteUrl,
+  buildEastMoneyKlineUrl,
+  EASTMONEY_KLINE_HOSTS,
+  parseEastMoneyDelayQuotePrice,
+} from './eastMoneyMarketApi';
 
 function isLiveDisabledInTest(): boolean {
   return process.env.NODE_ENV === 'test' && process.env.ALLOW_LIVE_PROVIDER_TESTS !== 'true';
@@ -61,78 +69,89 @@ export class EastMoneyGrahamDataProvider implements GrahamStockDataProvider {
   }
 
   private async fetchSnapshotFromKline(stockCode: string): Promise<GrahamStockSnapshot> {
-    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${eastMoneySecId(stockCode)}&klt=101&fqt=0&end=20500101&lmt=1&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61`;
-    const res = await getEastMoneyJson<{ data?: { name?: string; klines?: string[] } }>(url, 1, getProviderTimeoutMs('eastmoney'));
-    const latest = res.data?.klines?.[res.data.klines.length - 1];
-    if (!latest) throw new Error('EastMoney 日线行情数据不可用');
-    const parts = latest.split(',');
-    const close = Number(parts[2]);
-    if (!Number.isFinite(close) || close <= 0) throw new Error('EastMoney 日线行情数据不可用');
+    const secid = eastMoneySecId(stockCode);
+    let lastError: unknown;
+    for (const host of EASTMONEY_KLINE_HOSTS) {
+      try {
+        const url = buildEastMoneyKlineUrl(host, secid, { end: '20500101', lmt: 2 });
+        const res = await getEastMoneyJson<{ data?: { name?: string; klines?: string[] } }>(
+          url,
+          1,
+          getProviderTimeoutMs('eastmoney')
+        );
+        const latestStr = resolveValidClosingPrice(res.data?.klines ?? [], k => k.split(',')[0]);
+        if (!latestStr) throw new Error('EastMoney 日线行情数据不可用');
+        const parts = latestStr.split(',');
+        const close = Number(parts[2]);
+        if (!Number.isFinite(close) || close <= 0) throw new Error('EastMoney 日线行情数据不可用');
+        return {
+          stockCode,
+          stockName: String(res.data?.name ?? stockCode),
+          currentPrice: close,
+          priceAsOfDate: parts[0] || new Date().toISOString().split('T')[0],
+        };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  private async fetchSnapshotFromDelayQuote(stockCode: string): Promise<GrahamStockSnapshot> {
+    const url = buildEastMoneyDelayQuoteUrl(eastMoneySecId(stockCode));
+    const res = await getEastMoneyJson<{ data?: { f43?: number; f58?: string } }>(
+      url,
+      2,
+      getProviderTimeoutMs('eastmoney')
+    );
+    const close = parseEastMoneyDelayQuotePrice(res.data?.f43);
+    if (close == null) throw new Error('EastMoney 行情数据不可用');
     return {
       stockCode,
-      stockName: String(res.data?.name ?? stockCode),
+      stockName: String(res.data?.f58 ?? stockCode),
       currentPrice: close,
-      priceAsOfDate: parts[0] || new Date().toISOString().split('T')[0],
+      priceAsOfDate: new Date().toISOString().split('T')[0],
     };
   }
 
-  private async fetchSnapshotFromDailyBars(stockCode: string): Promise<GrahamStockSnapshot> {
-    const { close, tradeDate, logicalSource } = await fetchLatestCloseFromDailyBars(stockCode);
-    let stockName = stockCode;
+  private async resolveStockName(stockCode: string): Promise<string> {
     try {
       const rows = await this.fetchAnnualRows(stockCode);
       const name = rows[0]?.SECURITY_NAME_ABBR;
-      if (typeof name === 'string' && name.trim()) stockName = name.trim();
+      return typeof name === 'string' && name.trim() ? name.trim() : stockCode;
     } catch {
-      // name lookup is best-effort; price from daily bars is authoritative
+      return stockCode;
     }
-    return {
-      stockCode,
-      stockName,
-      currentPrice: close,
-      priceAsOfDate: tradeDate,
-      dataSource: logicalSource,
-    };
   }
 
   async getStockSnapshot(stockCode: string): Promise<GrahamStockSnapshot> {
     if (isLiveDisabledInTest()) {
       throw new Error('eastmoney graham provider disabled in test environment');
     }
-
-    return new Promise<GrahamStockSnapshot>((resolve, reject) => {
-      let settled = false;
-      let pending = 2;
-      let klineError: unknown;
-      let barsError: unknown;
-
-      const finish = (snapshot: GrahamStockSnapshot) => {
-        if (settled) return;
-        settled = true;
-        resolve(snapshot);
+    let snapshot: GrahamStockSnapshot | undefined;
+    try {
+      snapshot = await this.fetchSnapshotFromKline(stockCode);
+    } catch {
+      /* try delay quote next */
+    }
+    if (!snapshot) {
+      try {
+        snapshot = await this.fetchSnapshotFromDelayQuote(stockCode);
+      } catch {
+        /* try multi-provider daily bars last */
+      }
+    }
+    if (!snapshot) {
+      const bars = await fetchLatestCloseFromDailyBars(stockCode);
+      snapshot = {
+        stockCode,
+        stockName: await this.resolveStockName(stockCode),
+        currentPrice: bars.close,
+        priceAsOfDate: bars.tradeDate,
       };
-
-      const onSettled = () => {
-        pending -= 1;
-        if (settled || pending > 0) return;
-        const error = klineError ?? barsError ?? new Error('EastMoney 行情数据不可用');
-        reject(error instanceof Error ? error : new Error(String(error)));
-      };
-
-      void this.fetchSnapshotFromKline(stockCode)
-        .then(finish)
-        .catch(error => {
-          klineError = error;
-        })
-        .finally(onSettled);
-
-      void this.fetchSnapshotFromDailyBars(stockCode)
-        .then(finish)
-        .catch(error => {
-          barsError = error;
-        })
-        .finally(onSettled);
-    });
+    }
+    snapshot.dataSource = 'eastmoney';
+    return snapshot;
   }
 
   async getAdjustedEpsHistory(

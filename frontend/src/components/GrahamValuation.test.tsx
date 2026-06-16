@@ -8,6 +8,7 @@ import axios from 'axios';
 import { Modal, message } from 'antd';
 import { GrahamValuation } from './GrahamValuation';
 import { writeStockPool } from '../utils/grahamStockPool';
+import { AUTO_RETRY_DELAY_MS } from '../utils/grahamRetryPolicy';
 
 vi.mock('axios', () => ({
   default: {
@@ -52,7 +53,10 @@ describe('GrahamValuation cache UX', () => {
   beforeEach(() => {
     marketState.market = 'cn';
     stockPoolState.pool = ['600519.SH'];
+    message.destroy();
+    vi.mocked(axios.post).mockReset();
     vi.mocked(axios.post).mockResolvedValue({ data: { rows: [] } });
+    vi.mocked(axios.get).mockReset();
     vi.mocked(axios.get).mockResolvedValue({ data: { features: { secRoe: true } } });
   });
 
@@ -144,8 +148,10 @@ describe('GrahamValuation cache UX', () => {
       expect(screen.getByRole('columnheader', { name: 'BVPS' })).toBeInTheDocument()
     );
     expect(screen.getByLabelText('R 增长系数')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'R=0 模拟' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'R=0' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'R=7 模拟' })).not.toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: /未知/ })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: /自动\s*\(未知\)/ })).not.toBeInTheDocument();
   });
 
   it('renders drag handles for sortable rows', async () => {
@@ -174,14 +180,11 @@ describe('GrahamValuation cache UX', () => {
   it('shows table rows for stock pool codes even when valuation data is empty', async () => {
     marketState.market = 'us';
     stockPoolState.pool = ['AAPL', 'NVDA'];
-    vi.mocked(axios.post).mockRejectedValueOnce(new Error('network down'));
+    vi.mocked(axios.post).mockRejectedValue(new Error('network down'));
 
     render(<GrahamValuation />);
     await waitFor(() => expect(axios.post).toHaveBeenCalled());
-    await waitFor(() => {
-      const addButton = screen.getByRole('button', { name: /添加股票/ });
-      expect(addButton.className).not.toMatch(/ant-btn-loading/);
-    });
+    await waitFor(() => expect(screen.getByText('AAPL')).toBeInTheDocument());
 
     expect(screen.getByText('我的股票池 (2/50)')).toBeInTheDocument();
     expect(screen.getByText('AAPL')).toBeInTheDocument();
@@ -340,5 +343,337 @@ describe('GrahamValuation cache UX', () => {
     const secondBody = vi.mocked(axios.post).mock.calls[1][1] as { inputs: Array<{ stockCode: string }> };
     expect(secondBody.inputs).toHaveLength(1);
     expect(secondBody.inputs[0].stockCode).toBe('600519.SH');
+  });
+
+  it('auto-retries transient ERROR rows once after batch fetch', async () => {
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({
+        data: {
+          rows: [
+            {
+              stockCode: '600519.SH',
+              stockName: '',
+              currentPrice: 0,
+              startYear: 2019,
+              endYear: 2024,
+              dataAsOfDate: '',
+              status: 'ERROR',
+              message: 'timeout',
+            },
+            {
+              stockCode: '000858.SZ',
+              stockName: '五粮液',
+              currentPrice: 100,
+              startYear: 2019,
+              endYear: 2024,
+              dataAsOfDate: '2026-06-10',
+              status: 'OK',
+              message: '',
+              grahamPrice: 90,
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          rows: [
+            {
+              stockCode: '600519.SH',
+              stockName: '贵州茅台',
+              currentPrice: 1500,
+              startYear: 2019,
+              endYear: 2024,
+              dataAsOfDate: '2026-06-10',
+              status: 'OK',
+              message: '',
+              grahamPrice: 1200,
+            },
+          ],
+        },
+      });
+
+    stockPoolState.pool = ['600519.SH', '000858.SZ'];
+    render(<GrahamValuation />);
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+
+    await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_DELAY_MS + 50));
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+
+    const retryBody = vi.mocked(axios.post).mock.calls[1][1] as {
+      inputs: Array<{ stockCode: string }>;
+      refreshPolicy: string;
+    };
+    expect(retryBody.inputs.map(i => i.stockCode)).toEqual(['600519.SH']);
+    expect(retryBody.refreshPolicy).toBe('fresh-prices');
+  });
+
+  it('does not auto-retry when pool has only one stock', async () => {
+    vi.mocked(axios.post).mockResolvedValueOnce({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '',
+            currentPrice: 0,
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '',
+            status: 'ERROR',
+            message: 'timeout',
+          },
+        ],
+      },
+    });
+
+    stockPoolState.pool = ['600519.SH'];
+    render(<GrahamValuation />);
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+
+    await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_DELAY_MS + 50));
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not auto-retry permanent business ERROR rows in batch', async () => {
+    vi.mocked(axios.post).mockResolvedValueOnce({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '贵州茅台',
+            currentPrice: 1500,
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '2026-06-10',
+            status: 'ERROR',
+            message: 'EPS 非正，CAGR 无法可靠计算',
+          },
+          {
+            stockCode: '000858.SZ',
+            stockName: '五粮液',
+            currentPrice: 100,
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '2026-06-10',
+            status: 'OK',
+            message: '',
+            grahamPrice: 90,
+          },
+        ],
+      },
+    });
+
+    stockPoolState.pool = ['600519.SH', '000858.SZ'];
+    render(<GrahamValuation />);
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+
+    await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_DELAY_MS + 50));
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show retry button for permanent business ERROR', async () => {
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '贵州茅台',
+            currentPrice: 1500,
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '2026-06-10',
+            status: 'ERROR',
+            message: 'EPS 非正，CAGR 无法可靠计算',
+          },
+        ],
+      },
+    });
+
+    render(<GrahamValuation />);
+    await waitFor(() => expect(screen.getByText('失败')).toBeInTheDocument());
+    expect(screen.queryByLabelText('重试 600519.SH')).not.toBeInTheDocument();
+  });
+
+  it('shows 部分缺失 for WARNING rows', async () => {
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '贵州茅台',
+            currentPrice: 1500,
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '2026-06-10',
+            status: 'WARNING',
+            message: 'ROE 暂不可用',
+            grahamPrice: 1200,
+          },
+        ],
+      },
+    });
+
+    render(<GrahamValuation />);
+    await waitFor(() => expect(screen.getByText('部分缺失')).toBeInTheDocument());
+    expect(screen.queryByLabelText('重试 600519.SH')).not.toBeInTheDocument();
+  });
+
+  it('auto-retries multiple transient ERROR rows in one batch', async () => {
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({
+        data: {
+          rows: [
+            {
+              stockCode: '600519.SH',
+              status: 'ERROR',
+              message: 'timeout',
+            },
+            {
+              stockCode: '000858.SZ',
+              status: 'ERROR',
+              message: 'timeout',
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          rows: [
+            {
+              stockCode: '600519.SH',
+              status: 'OK',
+              message: '',
+            },
+            {
+              stockCode: '000858.SZ',
+              status: 'OK',
+              message: '',
+            },
+          ],
+        },
+      });
+
+    stockPoolState.pool = ['600519.SH', '000858.SZ'];
+    render(<GrahamValuation />);
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+
+    await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_DELAY_MS + 50));
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+
+    const retryBody = vi.mocked(axios.post).mock.calls[1][1] as {
+      inputs: Array<{ stockCode: string }>;
+      refreshPolicy: string;
+    };
+    expect(retryBody.inputs.map(i => i.stockCode)).toEqual(['600519.SH', '000858.SZ']);
+    expect(retryBody.refreshPolicy).toBe('fresh-prices');
+  });
+
+  describe('dataSourceOverride', () => {
+    beforeEach(() => {
+      localStorage.removeItem('grahamOverrides_cn');
+      localStorage.removeItem('grahamOverrides_us');
+    });
+
+    it('sends per-stock dataSourceOverride when user selects 新浪财经', async () => {
+      localStorage.setItem('grahamOverrides_cn', JSON.stringify({ '600519.SH': 'sina' }));
+
+      render(<GrahamValuation />);
+      await waitFor(() => expect(axios.post).toHaveBeenCalled());
+
+      const body = vi.mocked(axios.post).mock.calls[0][1] as {
+        inputs: Array<{ stockCode: string; dataSourceOverride?: string }>;
+      };
+      expect(body.inputs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ stockCode: '600519.SH', dataSourceOverride: 'sina' }),
+        ])
+      );
+    });
+
+    it('changing data source triggers refetch with new override', async () => {
+      localStorage.setItem('grahamOverrides_cn', JSON.stringify({ '600519.SH': 'sina' }));
+      vi.mocked(axios.post).mockResolvedValue({
+        data: {
+          rows: [
+            {
+              stockCode: '600519.SH',
+              stockName: '贵州茅台',
+              currentPrice: 1500,
+              dataSource: 'sina',
+              startYear: 2019,
+              endYear: 2024,
+              dataAsOfDate: '2026-06-10',
+              status: 'OK',
+              message: '',
+            },
+          ],
+        },
+      });
+
+      render(<GrahamValuation />);
+      await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+      vi.mocked(axios.post).mockClear();
+
+      const combobox = screen.getByRole('combobox');
+      fireEvent.mouseDown(combobox);
+      await waitFor(() => expect(screen.getByText('搜狐财经')).toBeInTheDocument());
+      fireEvent.click(screen.getByText('搜狐财经'));
+
+      await waitFor(() => expect(axios.post).toHaveBeenCalled());
+      const body = vi.mocked(axios.post).mock.calls[0][1] as {
+        inputs: Array<{ stockCode: string; dataSourceOverride?: string }>;
+        refreshPolicy: string;
+      };
+      expect(body.inputs[0]).toMatchObject({
+        stockCode: '600519.SH',
+        dataSourceOverride: 'sohu',
+      });
+      expect(body.refreshPolicy).toBe('fresh-prices');
+    });
+  });
+
+  it('does not trigger a third POST if auto-retry still returns ERROR', async () => {
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({
+        data: {
+          rows: [
+            {
+              stockCode: '600519.SH',
+              status: 'ERROR',
+              message: 'timeout',
+            },
+            {
+              stockCode: '000858.SZ',
+              status: 'OK',
+              message: '',
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          rows: [
+            {
+              stockCode: '600519.SH',
+              status: 'ERROR',
+              message: 'timeout still',
+            },
+          ],
+        },
+      });
+
+    stockPoolState.pool = ['600519.SH', '000858.SZ'];
+    render(<GrahamValuation />);
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+
+    await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_DELAY_MS + 50));
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+
+    await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_DELAY_MS + 50));
+    expect(axios.post).toHaveBeenCalledTimes(2);
   });
 });

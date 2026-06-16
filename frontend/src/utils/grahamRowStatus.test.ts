@@ -22,6 +22,8 @@ describe('grahamRowStatus', () => {
   it('marks ERROR and placeholder rows retryable', () => {
     expect(isGrahamRowRetryable({ status: 'ERROR', message: 'timeout of 8000ms exceeded' })).toBe(true);
     expect(isGrahamRowRetryable({ status: 'ERROR', message: '估值数据未加载，请点击「全部刷新」重试' })).toBe(true);
+    expect(isGrahamRowRetryable({ status: 'ERROR', message: '' })).toBe(true);
+    expect(isGrahamRowRetryable({ status: 'ERROR', message: 'EPS 非正，CAGR 无法可靠计算' })).toBe(false);
     expect(isGrahamRowRetryable({ status: 'WARNING', message: 'ROE 暂不可用' })).toBe(false);
     expect(isGrahamRowRetryable({ status: 'OK', message: '' })).toBe(false);
   });

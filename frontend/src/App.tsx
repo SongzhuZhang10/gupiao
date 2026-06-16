@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Layout, Form, Input, InputNumber, Button, DatePicker, Select, Card, Table, Typography, Space, message, Radio, Alert, Switch, Tag, Tooltip, Collapse, Modal, ConfigProvider, theme, Tabs } from 'antd';
+import React, { useEffect, useState } from 'react';
+import { Layout, Form, Input, InputNumber, Button, DatePicker, Select, Card, Table, Typography, Space, message, Radio, Alert, Switch, Tag, Tooltip, Collapse, Modal, ConfigProvider, theme, Tabs, Segmented } from 'antd';
 import ReactECharts from 'echarts-for-react';
 import axios from 'axios';
 import { GrahamValuation } from './components/GrahamValuation';
@@ -12,16 +12,19 @@ import {
   type ApiResponse,
   type DisplayMode,
   type DividendYieldZoneResponse,
-  type SourceMetadataSummary,
 } from './chartOptions';
+import { useMarket } from './context/MarketContext';
+import { checkBackendHealth } from './utils/backendHealth';
+import {
+  isValidStockCode,
+  stockCodeErrorForMarket,
+  stockCodePlaceholderForMarket,
+} from './utils/stock';
 
 const { Header, Content } = Layout;
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 const ALL_FREE_SOURCES_UNAVAILABLE = '所有免费数据源均不可用';
-const A_SHARE_STOCK_CODE_ERROR = '请输入符合A股股票代码格式的代码，例如 600519 或 600519.SH';
-const SH_A_SHARE_RE = /^(600|601|603|605|688)\d{3}$/;
-const SZ_A_SHARE_RE = /^(000|001|002|003|300|301)\d{3}$/;
 const appTheme = {
   algorithm: theme.darkAlgorithm,
   token: {
@@ -50,68 +53,45 @@ const sourceNameMap: Record<string, string> = {
   cninfo: '巨潮资讯',
   baostock: 'Baostock开源数据',
   akshare_generic: 'AKShare开源数据',
+  tushare: 'Tushare免费数据',
+  yahoo: 'Yahoo Finance',
   mock: '本地模拟数据',
 };
-
-function isValidAShareStockCode(code: unknown): boolean {
-  if (typeof code !== 'string') return false;
-  const normalizedCode = code.trim().toUpperCase();
-  if (!normalizedCode) return false;
-
-  const [digits, suffix] = normalizedCode.split('.');
-  if (!/^\d{6}$/.test(digits)) return false;
-
-  if (!suffix) {
-    return SH_A_SHARE_RE.test(digits) || SZ_A_SHARE_RE.test(digits);
-  }
-  if (suffix === 'SH') {
-    return SH_A_SHARE_RE.test(digits);
-  }
-  if (suffix === 'SZ') {
-    return SZ_A_SHARE_RE.test(digits);
-  }
-  return false;
-}
 
 function formatZoneLabel(zoneId: string, label: string): string {
   return zoneId === 'exit' ? '清仓区' : label;
 }
 
-export const SourceMetadataView: React.FC<{ metadata?: SourceMetadataSummary }> = ({ metadata }) => {
-  if (!metadata) return null;
+export const SourceMetadataView: React.FC<{ 
+  priceSource?: string;
+  dividendSource?: string;
+}> = ({ priceSource, dividendSource }) => {
+  if (!priceSource) return null;
 
-  const flags = metadata.quality_flags || [];
-  const isMock = metadata.logical_source === 'mock';
-  const sourceName = sourceNameMap[metadata.logical_source] || metadata.logical_source;
+  const getSourceName = (s: string) => sourceNameMap[s] || s;
+
+  if (dividendSource && priceSource !== dividendSource) {
+    return (
+      <Space size={[4, 4]}>
+        <Tag color={priceSource === 'mock' ? 'error' : 'purple'} style={{ border: 'none', borderRadius: 4 }}>
+          价格源: {getSourceName(priceSource)}
+        </Tag>
+        <Tag color={dividendSource === 'mock' ? 'error' : 'cyan'} style={{ border: 'none', borderRadius: 4 }}>
+          分红源: {getSourceName(dividendSource)}
+        </Tag>
+      </Space>
+    );
+  }
 
   return (
-    <div style={{ marginBottom: 16 }}>
-      <Space size={[8, 8]} wrap>
-        <Text strong>数据来源</Text>
-        <Tag color={isMock ? 'error' : 'blue'}>{sourceName}</Tag>
-        <Tag color={metadata.fallback_used ? 'orange' : 'green'}>
-          {metadata.fallback_used ? '已降级' : '首选源'}
-        </Tag>
-        <Tag>优先级 #{metadata.source_priority_rank}</Tag>
-        {flags.map(flag => (
-          <Tag key={flag} color={flag === 'needs_review' ? 'red' : 'default'}>
-            {flag}
-          </Tag>
-        ))}
-      </Space>
-      {isMock && (
-        <Alert
-          message="警告：当前处于 Mock 降级模式，您看到的是系统自动生成的模拟数据，不能代表真实市场行情。"
-          type="error"
-          showIcon
-          style={{ marginTop: 8 }}
-        />
-      )}
-    </div>
+    <Tag color={priceSource === 'mock' ? 'error' : 'blue'} style={{ border: 'none', borderRadius: 4 }}>
+      数据源: {getSourceName(priceSource)}
+    </Tag>
   );
 };
 
 const App: React.FC = () => {
+  const { market, setMarket, marketLabel } = useMarket();
   const [form] = Form.useForm();
   const priceMode = Form.useWatch('priceMode', form) || 'forward';
   const [loading, setLoading] = useState(false);
@@ -120,6 +100,17 @@ const App: React.FC = () => {
   const [zonesData, setZonesData] = useState<DividendYieldZoneResponse | null>(null);
   const [showZones, setShowZones] = useState<boolean>(true);
   const [zonesError, setZonesError] = useState<string | null>(null);
+  const [backendOk, setBackendOk] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void checkBackendHealth().then(ok => {
+      if (!cancelled) setBackendOk(ok);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const warningMessages = Array.from(new Set([
     ...(data?.warnings || []),
@@ -131,6 +122,11 @@ const App: React.FC = () => {
     setZonesData(null);
     setZonesError(null);
   };
+
+  useEffect(() => {
+    clearAnalysis();
+    form.setFieldValue('stockCode', undefined);
+  }, [market, form]);
 
   const fetchAnalysis = async (values: any, allowMockFallback: boolean) => {
     try {
@@ -145,10 +141,12 @@ const App: React.FC = () => {
         params: {
           startDate,
           endDate,
-          priceMode: values.priceMode ?? 'forward',
+          priceMode: values.priceMode,
           dividendMode: values.dividendMode,
           allowMockFallback,
           cacheTtlHours,
+          market,
+          dataSourceOverride: values.dataSourceOverride || undefined,
         }
       });
 
@@ -160,6 +158,8 @@ const App: React.FC = () => {
           dividendBasis: 'pre_tax',
           allowMockFallback,
           cacheTtlHours,
+          market,
+          dataSourceOverride: values.dataSourceOverride || undefined,
         }
       }).catch(err => {
         setZonesError(err.response?.data?.error || '获取操作区间数据失败');
@@ -255,17 +255,17 @@ const App: React.FC = () => {
               name="stockCode"
               label="股票代码"
               rules={[
-                { required: true, message: '请输入股票代码 (例如 600519)' },
+                { required: true, message: `请输入股票代码 (${stockCodePlaceholderForMarket(market)})` },
                 {
                   validator: (_, value) => (
-                    !value || isValidAShareStockCode(value)
+                    !value || isValidStockCode(value, market)
                       ? Promise.resolve()
-                      : Promise.reject(new Error(A_SHARE_STOCK_CODE_ERROR))
+                      : Promise.reject(new Error(stockCodeErrorForMarket(market)))
                   ),
                 },
               ]}
             >
-              <Input placeholder="例如 600519 或 600519.SH" style={{ width: 200 }} />
+              <Input placeholder={stockCodePlaceholderForMarket(market)} style={{ width: 200 }} />
             </Form.Item>
 
             <Form.Item
@@ -286,6 +286,27 @@ const App: React.FC = () => {
               <Select style={{ width: 150 }}>
                 <Select.Option value="dv_ratio">静态股息率</Select.Option>
                 <Select.Option value="dv_ttm">滚动股息率(TTM)</Select.Option>
+              </Select>
+            </Form.Item>
+
+            <Form.Item name="dataSourceOverride" label="行情与分红数据源" initialValue="">
+              <Select style={{ width: 160 }}>
+                <Select.Option value="">自动 (东方财富优先)</Select.Option>
+                {market === 'cn' ? (
+                  <>
+                    <Select.Option value="eastmoney">东方财富</Select.Option>
+                    <Select.Option value="sina">新浪财经</Select.Option>
+                    <Select.Option value="akshare_generic">AKShare</Select.Option>
+                    <Select.Option value="baostock">Baostock</Select.Option>
+                    <Select.Option value="cninfo">巨潮资讯</Select.Option>
+                    <Select.Option value="tushare">Tushare</Select.Option>
+                    <Select.Option value="sohu">搜狐财经</Select.Option>
+                  </>
+                ) : (
+                  <>
+                    <Select.Option value="yahoo">Yahoo Finance</Select.Option>
+                  </>
+                )}
               </Select>
             </Form.Item>
 
@@ -362,8 +383,18 @@ const App: React.FC = () => {
 
       {data && (
         <>
-          <Card style={{ ...cardStyle, marginBottom: 24 }}>
-            <SourceMetadataView metadata={data.sourceMetadata} />
+          <Card 
+            title={
+              <Space align="center" size="middle">
+                <span style={{ fontSize: 16, fontWeight: 500 }}>行情走势与操作区间 - {data.stockCode}</span>
+                <SourceMetadataView 
+                  priceSource={data.dataSource} 
+                  dividendSource={zonesData?.dataSource} 
+                />
+              </Space>
+            }
+            style={{ ...cardStyle, marginBottom: 24 }}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div>
                 <span style={{ marginRight: 8, fontWeight: 500 }}>彩色区间背景:</span>
@@ -438,23 +469,42 @@ const App: React.FC = () => {
     <ConfigProvider theme={appTheme}>
       <Layout className="app-shell" style={{ minHeight: '100vh', background: '#0b1120' }}>
       <Header style={{ background: '#0f172a', borderBottom: '1px solid #243244', padding: '0 24px' }}>
-        <Title level={3} style={{ margin: '12px 0', color: '#f8fafc' }}>A股可视化仪表盘</Title>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+          <Title level={3} style={{ margin: '12px 0', color: '#f8fafc' }}>{marketLabel}可视化仪表盘</Title>
+          <Segmented
+            value={market}
+            onChange={(value) => setMarket(value as typeof market)}
+            options={[
+              { label: 'A股', value: 'cn' },
+              { label: '美股', value: 'us' },
+            ]}
+          />
+        </div>
       </Header>
       
-      <Content style={{ padding: '24px', maxWidth: 1200, margin: '0 auto', width: '100%' }}>
-        <Tabs 
+      <Content style={{ padding: '24px', maxWidth: 1600, margin: '0 auto', width: '100%' }}>
+        {backendOk === false && (
+          <Alert
+            type="error"
+            showIcon
+            message="无法连接后端服务"
+            description="请在项目根目录运行 npm run dev 或 npm run dev:backend，然后刷新页面。打包版 Electron 应用会在启动时自动拉起后端。"
+            style={{ marginBottom: 16 }}
+          />
+        )}
+        <Tabs
           defaultActiveKey="1" 
           items={[
             {
               key: '1',
-              label: '股息率分析',
-              children: dividendYieldTabContent,
+              label: '格雷厄姆估值',
+              children: <GrahamValuation />,
             },
             {
               key: '2',
-              label: '格雷厄姆估值',
-              children: <GrahamValuation />,
-            }
+              label: '股息率分析',
+              children: dividendYieldTabContent,
+            },
           ]} 
         />
       </Content>

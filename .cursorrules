@@ -33,3 +33,29 @@ You are operating with Superpowers. You MUST adhere to the following software de
 - If the user asks for a simple change, treat it as a task and check if skills apply.
 
 Follow these rules as your primary operating directive.
+
+---
+
+# Plugins and Tooling (Cursor)
+
+All plugins below are installed globally and in this project. Read the matching skill or rule before use.
+
+## CodeGraph (MCP)
+- **When**: Exploring codebases, finding definitions, tracing call chains, impact analysis
+- **How**: MCP tools — `codegraph_explore`, `codegraph_search`, `codegraph_callers`, `codegraph_callees`, `codegraph_impact`
+- **Setup**: `codegraph init -i` in project root
+
+## Graphify
+- **When**: Codebase architecture questions when `graphify-out/graph.json` exists
+- **Skill**: `.cursor/skills/graphify/SKILL.md` — trigger with `/graphify`
+- **How**: `graphify query "<question>"`, `graphify path "<A>" "<B>"`, `graphify explain "<concept>"`, `graphify update .`
+
+## Impeccable
+- **When**: Frontend design, UI creation, design audits, visual polish
+- **Skill**: `.cursor/skills/impeccable/SKILL.md` — trigger with `/impeccable <command>`
+- **How**: `/impeccable init`, `/impeccable audit`, `/impeccable craft`, `/impeccable polish`, `/impeccable critique`
+
+## Superpowers
+- **When**: Every task — TDD, brainstorming, systematic debugging
+- **Skills**: `.cursor/skills/` (14 skills including `using-superpowers`, `brainstorming`, `test-driven-development`)
+- **How**: Automatic — read relevant skill before acting

@@ -1,6 +1,15 @@
 import { DailyData } from '../../utils/sampling';
 
-export type ProviderName = 'baostock' | 'eastmoney' | 'akshare_generic' | 'sina' | 'sohu' | 'cninfo' | 'mock';
+export type ProviderName =
+  | 'baostock'
+  | 'eastmoney'
+  | 'akshare_generic'
+  | 'tushare'
+  | 'sina'
+  | 'sohu'
+  | 'cninfo'
+  | 'yahoo'
+  | 'mock';
 export type DataType = 'daily_bars' | 'realtime_quote' | 'dividend_events' | 'financial_indicators' | 'dividend_yield';
 
 export interface SourceMetadata {

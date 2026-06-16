@@ -31,14 +31,21 @@ cd ..
 
 ## 2. 数据源优先级与配置
 
-本项目不使用 Tushare Pro 或任何付费数据源。Provider 优先级按数据类型配置：
+本项目不使用付费终端数据源。Provider 优先级按数据类型配置：
 
-- 历史日线 / K 线：Baostock → Eastmoney → AKShare 通用接口 → Sina → Sohu
-- 分红、公司行动、公告和披露：CNINFO / 巨潮资讯逻辑源 → Eastmoney → AKShare 通用接口 → Sina → Sohu
+- 历史日线 / K 线：Baostock → Eastmoney → AKShare → Tushare 免费版 → Sina → Sohu
+- 分红、公司行动、公告和披露：CNINFO / 巨潮资讯 → Eastmoney → AKShare → Tushare 免费版 → Sina → Sohu
 - 实时行情：Eastmoney → Sina → AKShare 通用接口 → Sohu
 - 股息率：优先由项目内部用现金分红和参考收盘价计算，再保留供应商字段作为对照
 
-Baostock、AKShare 和 CNINFO 相关访问通过可选 Python bridge 调用。未安装 Python 包、接口不可用、超时、限流或返回结构异常时，系统会记录失败原因并尝试下一个 provider。默认情况下，所有真实免费数据源均失败时 API 会返回结构化错误，不会静默返回伪数据。
+Baostock、AKShare、Tushare 和 CNINFO 相关访问通过 Python bridge 调用。安装依赖：
+
+```bash
+cd backend
+pip install -r requirements.txt
+```
+
+在 `backend/.env` 配置 `TUSHARE_TOKEN`（[Tushare 免费注册](https://tushare.pro) 获取）。未安装 Python 包、未配置 token、接口不可用、超时、限流或返回结构异常时，系统会记录失败原因并尝试下一个 provider。默认情况下，所有真实免费数据源均失败时 API 会返回结构化错误，不会静默返回伪数据。
 
 可在 `backend/.env` 中调整：
 

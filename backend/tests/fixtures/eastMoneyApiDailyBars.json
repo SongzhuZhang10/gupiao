@@ -1,0 +1,24 @@
+{
+  "data": {
+    "dataTableDTOList": [
+      {
+        "code": "600519.SH",
+        "title": "贵州茅台收盘价",
+        "table": {
+          "headName": ["2024-01-02", "2024-01-03"],
+          "f2": [1680.5, 1690.2]
+        },
+        "nameMap": {
+          "headName": "时间",
+          "f2": "收盘价"
+        },
+        "field": {
+          "returnCode": "f2",
+          "returnName": "收盘价",
+          "dateGranularity": "DAY"
+        },
+        "indicatorOrder": ["f2"]
+      }
+    ]
+  }
+}

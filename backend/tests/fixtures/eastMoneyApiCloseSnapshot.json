@@ -1,0 +1,31 @@
+{
+  "data": {
+    "questionId": "q-close",
+    "dataTableDTOList": [
+      {
+        "code": "600519.SH",
+        "entityName": "贵州茅台(600519.SH)",
+        "title": "贵州茅台收盘价",
+        "table": {
+          "headName": ["2026-06-11"],
+          "f2": [1498.0]
+        },
+        "nameMap": {
+          "headName": "时间",
+          "f2": "收盘价"
+        },
+        "entityTagDTO": {
+          "secuCode": "600519",
+          "marketChar": ".SH",
+          "fullName": "贵州茅台"
+        },
+        "field": {
+          "returnCode": "f2",
+          "returnName": "收盘价",
+          "dateGranularity": "DAY"
+        },
+        "indicatorOrder": ["f2"]
+      }
+    ]
+  }
+}

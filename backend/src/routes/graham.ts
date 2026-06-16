@@ -21,16 +21,19 @@ function parseRefreshPolicy(value: unknown): GrahamRefreshPolicy | undefined | n
 
 const router = Router();
 
-let providerFactory: GrahamProviderFactory = createGrahamDataProvider;
+const defaultProviderFactory: GrahamProviderFactory = (market, override) =>
+  createGrahamDataProvider(market, undefined, override);
+
+let providerFactory: GrahamProviderFactory = defaultProviderFactory;
 
 export function setGrahamDataProviderFactoryForTests(
-  factory: (market: ReturnType<typeof parseMarketRegion>) => GrahamStockDataProvider
+  factory: GrahamProviderFactory
 ) {
   providerFactory = factory;
 }
 
 export function resetGrahamDataProviderFactoryForTests() {
-  providerFactory = createGrahamDataProvider;
+  providerFactory = defaultProviderFactory;
 }
 
 router.post('/evaluate', async (req, res) => {
@@ -47,7 +50,7 @@ router.post('/evaluate', async (req, res) => {
 
     const rows = await evaluateGrahamInputs(
       inputs,
-      providerFactory === createGrahamDataProvider ? undefined : providerFactory,
+      providerFactory === defaultProviderFactory ? undefined : providerFactory,
       { refreshPolicy, cacheTtlHours }
     );
     res.json({ rows });

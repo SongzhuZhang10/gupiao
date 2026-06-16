@@ -12,8 +12,8 @@ import { normalizeDailyBars } from './validation';
 import { runPythonProvider } from './pythonBridge';
 import { getProviderConfig, getProviderTimeoutMs } from './config';
 import { createYahooProvider } from './yahooAdapter';
-import { createEastMoneyApiProvider } from './eastMoneyApiProvider';
 import { eastMoneySecId } from '../../utils/eastMoneySecId';
+import { buildEastMoneyKlineUrl, EASTMONEY_KLINE_HOSTS } from '../graham/eastMoneyMarketApi';
 
 function isLiveDisabledInTest(): boolean {
   return process.env.NODE_ENV === 'test' && process.env.ALLOW_LIVE_PROVIDER_TESTS !== 'true';
@@ -127,6 +127,87 @@ function calculateVendorYield(tradeDateStr: string, closePrice: number, events: 
   return closePrice > 0 ? Number(((sum / closePrice) * 100).toFixed(4)) : undefined;
 }
 
+async function fetchSinaDailyBars(
+  symbol: string,
+  startDate: string,
+  endDate: string,
+  rank: number,
+  fallbackUsed: boolean,
+  qualityFlags: string[] = [],
+  logicalSourceOverride?: ProviderName
+): Promise<DailyBarRecord[]> {
+  if (isLiveDisabledInTest()) throw new Error('sina live daily provider disabled in test environment');
+  const sinaSymbol = `${symbol.toUpperCase().endsWith('.SH') ? 'sh' : 'sz'}${pureCode(symbol)}`;
+  const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${sinaSymbol}&scale=240&ma=no&datalen=5000`;
+  const res = await axios.get(url, {
+    timeout: getProviderTimeoutMs('sina'),
+    headers: { Referer: 'http://finance.sina.com.cn/' },
+  });
+  if (!Array.isArray(res.data)) throw new Error('Sina API failed');
+  return normalizeDailyBars(
+    res.data
+      .filter((d: { day: string }) => d.day >= startDate && d.day <= endDate)
+      .map((d: { day: string; open: string; high: string; low: string; close: string; volume: string; amount: string }) => ({
+        date: d.day,
+        o: d.open,
+        h: d.high,
+        l: d.low,
+        c: d.close,
+        v: d.volume,
+        a: d.amount,
+      })),
+    {
+      logicalSource: logicalSourceOverride ?? 'sina',
+      accessLayer: 'sina_kline_json',
+      symbol,
+      rank,
+      fallbackUsed,
+      rawFieldMap: { trade_date: 'date', open: 'o', high: 'h', low: 'l', close: 'c', volume: 'v', amount: 'a' },
+      qualityFlags,
+    }
+  );
+}
+
+async function fetchBridgeDailyBarsWithSinaFallback(
+  provider: 'baostock' | 'tushare' | 'akshare_generic' | 'cninfo',
+  accessLayer: string,
+  symbol: string,
+  startDate: string,
+  endDate: string,
+  rank: number,
+  fallbackUsed: boolean,
+  qualityFlags: string[] = []
+): Promise<DailyBarRecord[]> {
+  const rawFieldMap = {
+    trade_date: 'date',
+    open: 'open',
+    high: 'high',
+    low: 'low',
+    close: 'close',
+    volume: 'volume',
+    amount: 'amount',
+  };
+  try {
+    const rows = await runPythonProvider<Record<string, unknown>[]>(
+      provider,
+      'daily_bars',
+      { symbol, startDate, endDate },
+      getProviderTimeoutMs(provider)
+    );
+    return normalizeDailyBars(rows, {
+      logicalSource: provider,
+      accessLayer,
+      symbol,
+      rank,
+      fallbackUsed,
+      rawFieldMap,
+      qualityFlags,
+    });
+  } catch {
+    return fetchSinaDailyBars(symbol, startDate, endDate, rank, true, [...qualityFlags, 'bridge_fallback_sina'], provider);
+  }
+}
+
 function createMockProvider(): DataProvider {
   return {
     name: 'mock',
@@ -155,29 +236,31 @@ function createCnProviders(): DataProvider[] {
     {
       name: 'baostock',
       accessLayer: 'python_bridge_baostock',
-      getDailyBars: async (symbol, startDate, endDate, _adjust, rank = 1, fallbackUsed = false) => {
-        const rows = await runPythonProvider<Record<string, unknown>[]>('baostock', 'daily_bars', { symbol, startDate, endDate }, getProviderTimeoutMs('baostock'));
-        return normalizeDailyBars(rows, {
-          logicalSource: 'baostock',
-          accessLayer: 'python_bridge_baostock',
+      getDailyBars: async (symbol, startDate, endDate, _adjust, rank = 1, fallbackUsed = false) =>
+        fetchBridgeDailyBarsWithSinaFallback(
+          'baostock',
+          'python_bridge_baostock',
           symbol,
+          startDate,
+          endDate,
           rank,
-          fallbackUsed,
-          rawFieldMap: {
-            trade_date: 'date',
-            open: 'open',
-            high: 'high',
-            low: 'low',
-            close: 'close',
-            volume: 'volume',
-            amount: 'amount',
-          },
-        });
-      },
+          fallbackUsed
+        ),
     },
     {
       name: 'cninfo',
       accessLayer: 'python_bridge_akshare_cninfo',
+      getDailyBars: async (symbol, startDate, endDate, _adjust, rank = 1, fallbackUsed = false) =>
+        fetchBridgeDailyBarsWithSinaFallback(
+          'cninfo',
+          'python_bridge_akshare_cninfo',
+          symbol,
+          startDate,
+          endDate,
+          rank,
+          fallbackUsed,
+          ['sina_daily_fallback']
+        ),
       getDividendEvents: async (symbol, startDate, endDate, rank = 1, fallbackUsed = false) => {
         const rows = await runPythonProvider<Record<string, unknown>[]>('cninfo', 'dividend_events', { symbol, startDate, endDate }, getProviderTimeoutMs('cninfo'));
         return mapBridgeDividendRows(symbol, rows, 'cninfo', 'python_bridge_akshare_cninfo', rank, fallbackUsed);
@@ -190,10 +273,33 @@ function createCnProviders(): DataProvider[] {
         if (isLiveDisabledInTest()) throw new Error('eastmoney live daily provider disabled in test environment');
         const beg = startDate.replace(/-/g, '');
         const end = endDate.replace(/-/g, '');
-        const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${eastMoneySecId(symbol)}&klt=101&fqt=0&beg=${beg}&end=${end}&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55,f56,f57`;
-        const res = await axios.get(url, { timeout: getProviderTimeoutMs('eastmoney') });
-        const klines = res.data?.data?.klines;
-        if (!Array.isArray(klines)) throw new Error('Eastmoney missing klines data');
+        const secid = eastMoneySecId(symbol);
+        let klines: string[] | undefined;
+        let lastError: unknown;
+        for (const host of EASTMONEY_KLINE_HOSTS) {
+          try {
+            const url = buildEastMoneyKlineUrl(host, secid, { beg, end });
+            const res = await axios.get(url, {
+              timeout: getProviderTimeoutMs('eastmoney'),
+              headers: { 'User-Agent': 'Mozilla/5.0' },
+            });
+            const rows = res.data?.data?.klines;
+            if (Array.isArray(rows) && rows.length > 0) {
+              klines = rows;
+              break;
+            }
+            lastError = new Error('Eastmoney missing klines data');
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        if (!klines) {
+          try {
+            return await fetchSinaDailyBars(symbol, startDate, endDate, rank, true, ['kline_fallback_sina'], 'eastmoney');
+          } catch {
+            throw lastError instanceof Error ? lastError : new Error('Eastmoney missing klines data');
+          }
+        }
         let events: DividendEventRecord[] = [];
         try {
           events = await fetchEastMoneyDividends(symbol, rank, fallbackUsed);
@@ -232,25 +338,16 @@ function createCnProviders(): DataProvider[] {
     {
       name: 'akshare_generic',
       accessLayer: 'python_bridge_akshare',
-      getDailyBars: async (symbol, startDate, endDate, _adjust, rank = 3, fallbackUsed = true) => {
-        const rows = await runPythonProvider<Record<string, unknown>[]>('akshare_generic', 'daily_bars', { symbol, startDate, endDate }, getProviderTimeoutMs('akshare_generic'));
-        return normalizeDailyBars(rows, {
-          logicalSource: 'akshare_generic',
-          accessLayer: 'python_bridge_akshare',
+      getDailyBars: async (symbol, startDate, endDate, _adjust, rank = 3, fallbackUsed = true) =>
+        fetchBridgeDailyBarsWithSinaFallback(
+          'akshare_generic',
+          'python_bridge_akshare',
           symbol,
+          startDate,
+          endDate,
           rank,
-          fallbackUsed,
-          rawFieldMap: {
-            trade_date: 'date',
-            open: 'open',
-            high: 'high',
-            low: 'low',
-            close: 'close',
-            volume: 'volume',
-            amount: 'amount',
-          },
-        });
-      },
+          fallbackUsed
+        ),
       getDividendEvents: async (symbol, startDate, endDate, rank = 3, fallbackUsed = true) => {
         const rows = await runPythonProvider<Record<string, unknown>[]>('akshare_generic', 'dividend_events', { symbol, startDate, endDate }, getProviderTimeoutMs('akshare_generic'));
         return mapBridgeDividendRows(symbol, rows, 'akshare_generic', 'python_bridge_akshare', rank, fallbackUsed);
@@ -259,25 +356,16 @@ function createCnProviders(): DataProvider[] {
     {
       name: 'tushare',
       accessLayer: 'python_bridge_tushare',
-      getDailyBars: async (symbol, startDate, endDate, _adjust, rank = 4, fallbackUsed = true) => {
-        const rows = await runPythonProvider<Record<string, unknown>[]>('tushare', 'daily_bars', { symbol, startDate, endDate }, getProviderTimeoutMs('tushare'));
-        return normalizeDailyBars(rows, {
-          logicalSource: 'tushare',
-          accessLayer: 'python_bridge_tushare',
+      getDailyBars: async (symbol, startDate, endDate, _adjust, rank = 4, fallbackUsed = true) =>
+        fetchBridgeDailyBarsWithSinaFallback(
+          'tushare',
+          'python_bridge_tushare',
           symbol,
+          startDate,
+          endDate,
           rank,
-          fallbackUsed,
-          rawFieldMap: {
-            trade_date: 'date',
-            open: 'open',
-            high: 'high',
-            low: 'low',
-            close: 'close',
-            volume: 'volume',
-            amount: 'amount',
-          },
-        });
-      },
+          fallbackUsed
+        ),
       getDividendEvents: async (symbol, startDate, endDate, rank = 4, fallbackUsed = true) => {
         const rows = await runPythonProvider<Record<string, unknown>[]>('tushare', 'dividend_events', { symbol, startDate, endDate }, getProviderTimeoutMs('tushare'));
         return mapBridgeDividendRows(symbol, rows, 'tushare', 'python_bridge_tushare', rank, fallbackUsed);
@@ -286,32 +374,8 @@ function createCnProviders(): DataProvider[] {
     {
       name: 'sina',
       accessLayer: 'sina_public_http',
-      getDailyBars: async (symbol, startDate, endDate, _adjust, rank = 5, fallbackUsed = true) => {
-        if (isLiveDisabledInTest()) throw new Error('sina live daily provider disabled in test environment');
-        const sinaSymbol = `${symbol.toUpperCase().endsWith('.SH') ? 'sh' : 'sz'}${pureCode(symbol)}`;
-        const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${sinaSymbol}&scale=240&ma=no&datalen=5000`;
-        const res = await axios.get(url, { timeout: getProviderTimeoutMs('sina'), headers: { Referer: 'http://finance.sina.com.cn/' } });
-        if (!Array.isArray(res.data)) throw new Error('Sina API failed');
-        return normalizeDailyBars(
-          res.data.filter((d: any) => d.day >= startDate && d.day <= endDate).map((d: any) => ({
-            date: d.day,
-            o: d.open,
-            h: d.high,
-            l: d.low,
-            c: d.close,
-            v: d.volume,
-            a: d.amount,
-          })),
-          {
-            logicalSource: 'sina',
-            accessLayer: 'sina_kline_json',
-            symbol,
-            rank,
-            fallbackUsed,
-            rawFieldMap: { trade_date: 'date', open: 'o', high: 'h', low: 'l', close: 'c', volume: 'v', amount: 'a' },
-          }
-        );
-      },
+      getDailyBars: async (symbol, startDate, endDate, _adjust, rank = 5, fallbackUsed = true) =>
+        fetchSinaDailyBars(symbol, startDate, endDate, rank, fallbackUsed),
     },
     {
       name: 'sohu',

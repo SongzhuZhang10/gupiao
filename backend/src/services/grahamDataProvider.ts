@@ -3,10 +3,14 @@ export interface GrahamStockSnapshot {
   stockName: string;
   currentPrice: number;
   priceAsOfDate: string; // YYYY-MM-DD
+  dataSource?: string;
 }
 
+/** year = report-period calendar year (A-share REPORT_YEAR semantics). */
 export interface GrahamEpsRecord {
+  /** Report-period calendar year, not fiscal period-end calendar year. */
   year: number;
+  /** Diluted / adjusted EPS from the annual report for that year (sole EPS source). */
   adjustedEps: number;
 }
 
@@ -15,9 +19,15 @@ export interface GrahamRoeRecord {
   roe: number;
 }
 
+export interface GrahamBvpsRecord {
+  year: number;
+  bvps: number;
+}
+
 export interface GrahamStockDataProvider {
   getStockSnapshot(stockCode: string): Promise<GrahamStockSnapshot>;
   getAdjustedEpsHistory(stockCode: string, startYear: number, endYear: number): Promise<GrahamEpsRecord[]>;
+  getBvpsHistory(stockCode: string, startYear: number, endYear: number): Promise<GrahamBvpsRecord[]>;
   getLatestRoe(stockCode: string): Promise<GrahamRoeRecord>;
 }
 
@@ -51,6 +61,19 @@ export class MockGrahamDataProvider implements GrahamStockDataProvider {
       }
       history.push({ year, adjustedEps: currentEps });
       currentEps *= 1.1; // 10% growth mock
+    }
+    return history;
+  }
+
+  async getBvpsHistory(stockCode: string, startYear: number, endYear: number): Promise<GrahamBvpsRecord[]> {
+    if (stockCode === '000000') {
+      throw new Error('未找到股票代码');
+    }
+    const history: GrahamBvpsRecord[] = [];
+    let currentBvps = 8.0;
+    for (let year = startYear; year <= endYear; year++) {
+      history.push({ year, bvps: currentBvps });
+      currentBvps *= 1.05;
     }
     return history;
   }

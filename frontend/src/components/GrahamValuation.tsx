@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useContext, useMemo } from 'react';
-import { Form, Input, InputNumber, Button, Card, Table, Typography, Space, message, Tooltip, Row, Col, Modal, Tag } from 'antd';
+import { Card, Table, Typography, Space, Button, message, Tooltip, Input, Row, Col, Form, InputNumber, Modal, Tag, Select } from 'antd';
 import {
   InfoCircleOutlined,
   DeleteOutlined,
@@ -41,6 +41,7 @@ import {
 import { readStockPool, writeStockPool } from '../utils/grahamStockPool';
 import { orderValuationRowsByPool } from '../utils/orderValuationRowsByPool';
 import { DEFAULT_R_GROWTH_COEFF, recalcValuationPrices } from '../utils/grahamFormula';
+import { AUTO_RETRY_DELAY_MS, pickAutoRetryCodes } from '../utils/grahamRetryPolicy';
 import {
   formatGrahamStatusMessage,
   grahamStatusLabel,
@@ -71,6 +72,24 @@ export interface ValuationRow {
   status: 'OK' | 'ERROR' | 'WARNING';
   message: string;
 }
+
+const CN_DATA_SOURCES = [
+  { label: '自动 (东方财富优先)', value: '' },
+  { label: '东财F10', value: 'eastmoney' },
+  { label: '新浪财经', value: 'sina' },
+  { label: 'AKShare', value: 'akshare_generic' },
+  { label: 'Baostock', value: 'baostock' },
+  { label: '巨潮资讯', value: 'cninfo' },
+  { label: 'Tushare', value: 'tushare' },
+  { label: '搜狐财经', value: 'sohu' },
+];
+
+const US_DATA_SOURCES = [
+  { label: '自动 (默认)', value: '' },
+  { label: 'Yahoo', value: 'yahoo' },
+];
+
+
 
 interface GrahamFormValues {
   startYear: number;
@@ -165,6 +184,21 @@ export const GrahamValuation: React.FC = () => {
   const [newStockCode, setNewStockCode] = useState('');
   const [retryingCodes, setRetryingCodes] = useState<Set<string>>(() => new Set());
 
+  const [dataSourceOverrides, setDataSourceOverridesState] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(`grahamOverrides_${market}`) || '{}');
+    } catch {
+      return {};
+    }
+  });
+  const overridesRef = React.useRef(dataSourceOverrides);
+
+  const setDataSourceOverrides = useCallback((nextOverrides: Record<string, string>) => {
+    overridesRef.current = nextOverrides;
+    setDataSourceOverridesState(nextOverrides);
+    localStorage.setItem(`grahamOverrides_${market}`, JSON.stringify(nextOverrides));
+  }, [market]);
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   const persistStockPool = useCallback(
@@ -195,6 +229,13 @@ export const GrahamValuation: React.FC = () => {
     const pool = readStockPool(market);
     setStockPool(pool);
     setData([]);
+    let newOverrides: Record<string, string> = {};
+    try {
+      newOverrides = JSON.parse(localStorage.getItem(`grahamOverrides_${market}`) || '{}');
+    } catch {}
+    overridesRef.current = newOverrides;
+    setDataSourceOverridesState(newOverrides);
+
     if (pool.length > 0) {
       void fetchValuations(pool, { refreshPolicy: 'default', marketOverride: market });
     }
@@ -251,6 +292,7 @@ export const GrahamValuation: React.FC = () => {
       refreshPolicy?: 'default' | 'fresh-prices';
       marketOverride?: typeof market;
       orderPool?: string[];
+      skipAutoRetry?: boolean;
     } = {}
   ): Promise<{ ok: boolean; rows: ValuationRow[]; errorMessage?: string }> => {
     const {
@@ -258,6 +300,7 @@ export const GrahamValuation: React.FC = () => {
       refreshPolicy = 'default',
       marketOverride = market,
       orderPool,
+      skipAutoRetry = false,
     } = options;
     if (codes.length === 0) return { ok: true, rows: [] };
     const params = getGrahamParams();
@@ -270,6 +313,7 @@ export const GrahamValuation: React.FC = () => {
         Y: params.Y,
         rGrowthCoeff: params.rGrowthCoeff,
         market: marketOverride,
+        dataSourceOverride: overridesRef.current[code],
       }));
 
       const res = await axios.post('/api/graham/evaluate', {
@@ -293,6 +337,19 @@ export const GrahamValuation: React.FC = () => {
         return orderValuationRowsByPool(newData, poolOrder);
       });
       if (isRefreshAll) message.success('全部刷新完成');
+
+      const autoRetryCodes = pickAutoRetryCodes(rows);
+      if (autoRetryCodes.length > 0 && !skipAutoRetry && codes.length > 1) {
+        window.setTimeout(() => {
+          void fetchValuations(autoRetryCodes, {
+            refreshPolicy: 'fresh-prices',
+            marketOverride,
+            orderPool,
+            skipAutoRetry: true,
+          });
+        }, AUTO_RETRY_DELAY_MS);
+      }
+
       return { ok: true, rows };
     } catch (error: unknown) {
       console.error(error);
@@ -416,6 +473,17 @@ export const GrahamValuation: React.FC = () => {
     setData(prev => prev.filter(r => r.stockCode !== code));
   };
 
+  const handleDataSourceOverrideChange = (code: string, newSource: string) => {
+    const nextOverrides = { ...dataSourceOverrides };
+    if (!newSource) {
+      delete nextOverrides[code];
+    } else {
+      nextOverrides[code] = newSource;
+    }
+    setDataSourceOverrides(nextOverrides);
+    void fetchValuations([code], { refreshPolicy: 'fresh-prices' });
+  };
+
   const handleRetryStock = async (code: string) => {
     setRetryingCodes(prev => new Set(prev).add(code));
     try {
@@ -527,19 +595,19 @@ export const GrahamValuation: React.FC = () => {
         },
       },
       {
-        title: 'R=0 模拟',
+        title: 'R=0',
         dataIndex: 'grahamPriceR0',
         key: 'grahamPriceR0',
         render: (v: number) => <Text type="secondary">{v?.toFixed(2)}</Text>,
       },
       {
-        title: 'R=3 模拟',
+        title: 'R=3',
         dataIndex: 'grahamPriceR3',
         key: 'grahamPriceR3',
         render: (v: number) => <Text type="secondary">{v?.toFixed(2)}</Text>,
       },
       {
-        title: 'R=5 模拟',
+        title: 'R=5',
         dataIndex: 'grahamPriceR5',
         key: 'grahamPriceR5',
         render: (v: number) => <Text type="secondary">{v?.toFixed(2)}</Text>,
@@ -569,12 +637,11 @@ export const GrahamValuation: React.FC = () => {
         title: '数据源',
         dataIndex: 'dataSource',
         key: 'dataSource',
-        width: 90,
-        render: (text: string) => {
-          if (!text) return '-';
+        width: 120,
+        render: (text: string, r: ValuationRow) => {
+          const currentOverride = dataSourceOverrides[r.stockCode] || '';
           const nameMap: Record<string, string> = {
-            eastmoney_api: '东方财富',
-            eastmoney: '东方财富',
+            eastmoney: '东财F10',
             cninfo: '巨潮资讯',
             baostock: 'BaoStock',
             akshare_generic: 'AKShare',
@@ -583,11 +650,27 @@ export const GrahamValuation: React.FC = () => {
             sohu: '搜狐财经',
             yahoo: 'Yahoo',
             sec_edgar: 'SEC Edgar',
-            daily_bars_bridge: '行情兜底',
+            daily_bars_bridge: '兜底',
             mock: 'Mock',
           };
-          const displayName = nameMap[text] || text;
-          return <Tag color={text === 'mock' ? 'error' : 'blue'} style={{ margin: 0, border: 'none' }}>{displayName}</Tag>;
+          const resolvedName = text ? (nameMap[text] || text) : '未知';
+          const options = market === 'us' ? US_DATA_SOURCES : CN_DATA_SOURCES;
+
+          return (
+            <Select
+              size="small"
+              value={currentOverride}
+              onChange={(val) => handleDataSourceOverrideChange(r.stockCode, val)}
+              options={options}
+              labelRender={opt => {
+                if (opt.value === '' || opt.value == null) return resolvedName;
+                return opt.label;
+              }}
+              style={{ width: '100%' }}
+              dropdownMatchSelectWidth={false}
+              bordered={false}
+            />
+          );
         },
       },
       {
@@ -620,7 +703,7 @@ export const GrahamValuation: React.FC = () => {
         ),
       },
     ],
-    [retryingCodes]
+    [retryingCodes, dataSourceOverrides, market]
   );
 
   return (

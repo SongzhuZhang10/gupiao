@@ -19,6 +19,7 @@ import {
 } from './validation';
 import { createProviders } from './adapters';
 import { getProviderConfig } from './config';
+import { isProviderHealthy, markProviderUnhealthy, shouldMarkUnhealthy } from './providerHealth';
 
 function priorityFor(config: ProviderConfig, dataType: DataType, provider: ProviderName): number {
   const index = config.priorities[dataType].indexOf(provider);
@@ -58,7 +59,7 @@ function makeMockDailyBars(symbol: string, startDate: string, endDate: string): 
       access_layer: 'local_mock_data',
       retrieved_at: new Date().toISOString(),
       symbol,
-      market: symbol.endsWith('.SH') ? 'SH' : symbol.endsWith('.SZ') ? 'SZ' : 'UNKNOWN',
+      market: symbol.endsWith('.SH') ? 'SH' : symbol.endsWith('.SZ') ? 'SZ' : /^[A-Z]/.test(symbol) ? 'US' : 'UNKNOWN',
       source_priority_rank: 999,
       fallback_used: true,
       raw_field_map: {},
@@ -88,7 +89,7 @@ function makeMockDividendEvents(symbol: string, startDate?: string, endDate?: st
         access_layer: 'local_mock_dividend_events',
         retrieved_at: new Date().toISOString(),
         symbol,
-        market: symbol.endsWith('.SH') ? 'SH' : symbol.endsWith('.SZ') ? 'SZ' : 'UNKNOWN',
+        market: symbol.endsWith('.SH') ? 'SH' : symbol.endsWith('.SZ') ? 'SZ' : /^[A-Z]/.test(symbol) ? 'US' : 'UNKNOWN',
         source_priority_rank: 999,
         fallback_used: true,
         raw_field_map: {},
@@ -155,6 +156,54 @@ async function attemptDailyProvider(
   }
 }
 
+type ProviderOutcome<T> = {
+  providerName: ProviderName;
+  rank: number;
+  records?: T[];
+  attempt: ProviderAttempt;
+};
+
+async function raceProvidersWithEarlyReturn<T>(
+  starters: Array<() => Promise<ProviderOutcome<T> | null>>
+): Promise<ProviderOutcome<T>[]> {
+  const outcomes: ProviderOutcome<T>[] = [];
+  const completedRanks = new Set<number>();
+  let settled = 0;
+  const total = starters.length;
+
+  return new Promise(resolve => {
+    const maybeFinish = () => {
+      if (settled >= total) {
+        resolve(outcomes);
+        return;
+      }
+
+      const successes = outcomes
+        .filter(outcome => outcome.records && outcome.records.length > 0)
+        .sort((a, b) => a.rank - b.rank);
+      const best = successes[0];
+      if (!best) return;
+
+      const higherPrioritySettled = Array.from({ length: best.rank - 1 }, (_, index) => index + 1)
+        .every(rank => completedRanks.has(rank));
+      if (higherPrioritySettled) {
+        resolve(outcomes);
+      }
+    };
+
+    starters.forEach(starter => {
+      void starter().then(outcome => {
+        if (outcome) {
+          outcomes.push(outcome);
+          completedRanks.add(outcome.rank);
+        }
+        settled += 1;
+        maybeFinish();
+      });
+    });
+  });
+}
+
 async function attemptDividendProvider(
   provider: DataProvider,
   symbol: string,
@@ -210,17 +259,48 @@ export function createFallbackManager(providers: DataProvider[] = createProvider
 
   async function getDailyBars(symbol: string, startDate: string, endDate: string, adjust?: string): Promise<ProviderResult<DailyBarRecord>> {
     const attempts: ProviderAttempt[] = [];
+    const dataType: DataType = 'daily_bars';
 
-    for (const providerName of config.priorities.daily_bars) {
-      const provider = providerMap.get(providerName);
-      if (!provider) continue;
-      const rank = priorityFor(config, 'daily_bars', providerName);
-      const { records, attempt } = await attemptDailyProvider(provider, symbol, startDate, endDate, adjust, rank);
-      attempts.push(attempt);
-      logAttempt('daily_bars', symbol, attempt);
-      if (records) {
-        return { data: records, sourceMetadata: sourceMetadataFrom(records), attempts, warnings: [] };
-      }
+    const dailyProviders = config.priorities.daily_bars.filter(providerName => providerMap.has(providerName));
+    const outcomes = await raceProvidersWithEarlyReturn<DailyBarRecord>(
+      dailyProviders.map(providerName => async () => {
+        if (!isProviderHealthy(providerName, dataType)) {
+          const attempt: ProviderAttempt = {
+            provider: providerName,
+            accessLayer: providerMap.get(providerName)?.accessLayer ?? providerName,
+            priorityRank: priorityFor(config, dataType, providerName),
+            status: 'unavailable',
+            reason: 'skipped due to recent failures',
+          };
+          return { providerName, rank: attempt.priorityRank, records: undefined, attempt };
+        }
+
+        const provider = providerMap.get(providerName)!;
+        const rank = priorityFor(config, dataType, providerName);
+        const { records, attempt } = await attemptDailyProvider(provider, symbol, startDate, endDate, adjust, rank);
+        logAttempt(dataType, symbol, attempt);
+        if (!records && shouldMarkUnhealthy(attempt.reason)) {
+          markProviderUnhealthy(providerName, dataType);
+        }
+        return { providerName, rank, records, attempt };
+      })
+    );
+
+    for (const outcome of outcomes) {
+      attempts.push(outcome.attempt);
+    }
+
+    const winner = outcomes
+      .filter(outcome => !!outcome.records)
+      .sort((a, b) => a.rank - b.rank)[0];
+
+    if (winner?.records) {
+      return {
+        data: winner.records,
+        sourceMetadata: sourceMetadataFrom(winner.records),
+        attempts,
+        warnings: [],
+      };
     }
 
     if (config.enableMockFallback) {
@@ -241,17 +321,48 @@ export function createFallbackManager(providers: DataProvider[] = createProvider
 
   async function getDividendEvents(symbol: string, startDate?: string, endDate?: string): Promise<ProviderResult<DividendEventRecord>> {
     const attempts: ProviderAttempt[] = [];
+    const dataType: DataType = 'dividend_events';
 
-    for (const providerName of config.priorities.dividend_events) {
-      const provider = providerMap.get(providerName);
-      if (!provider) continue;
-      const rank = priorityFor(config, 'dividend_events', providerName);
-      const { records, attempt } = await attemptDividendProvider(provider, symbol, startDate, endDate, rank);
-      attempts.push(attempt);
-      logAttempt('dividend_events', symbol, attempt);
-      if (records) {
-        return { data: records, sourceMetadata: sourceMetadataFrom(records), attempts, warnings: [] };
-      }
+    const dividendProviders = config.priorities.dividend_events.filter(providerName => providerMap.has(providerName));
+    const outcomes = await raceProvidersWithEarlyReturn<DividendEventRecord>(
+      dividendProviders.map(providerName => async () => {
+        if (!isProviderHealthy(providerName, dataType)) {
+          const attempt: ProviderAttempt = {
+            provider: providerName,
+            accessLayer: providerMap.get(providerName)?.accessLayer ?? providerName,
+            priorityRank: priorityFor(config, dataType, providerName),
+            status: 'unavailable',
+            reason: 'skipped due to recent failures',
+          };
+          return { providerName, rank: attempt.priorityRank, records: undefined, attempt };
+        }
+
+        const provider = providerMap.get(providerName)!;
+        const rank = priorityFor(config, dataType, providerName);
+        const { records, attempt } = await attemptDividendProvider(provider, symbol, startDate, endDate, rank);
+        logAttempt(dataType, symbol, attempt);
+        if (!records && shouldMarkUnhealthy(attempt.reason)) {
+          markProviderUnhealthy(providerName, dataType);
+        }
+        return { providerName, rank, records, attempt };
+      })
+    );
+
+    for (const outcome of outcomes) {
+      attempts.push(outcome.attempt);
+    }
+
+    const winner = outcomes
+      .filter(outcome => !!outcome.records)
+      .sort((a, b) => a.rank - b.rank)[0];
+
+    if (winner?.records) {
+      return {
+        data: winner.records,
+        sourceMetadata: sourceMetadataFrom(winner.records),
+        attempts,
+        warnings: [],
+      };
     }
 
     if (config.enableMockFallback) {

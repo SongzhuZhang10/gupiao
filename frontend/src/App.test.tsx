@@ -5,13 +5,25 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { fireEvent, waitFor } from '@testing-library/react';
 import { message, Modal } from 'antd';
 import axios from 'axios';
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import App, { SourceMetadataView } from './App';
+import { MarketProvider } from './context/MarketContext';
+
+function renderApp() {
+  return render(
+    <MarketProvider>
+      <App />
+    </MarketProvider>
+  );
+}
 
 vi.mock('axios', () => ({
   default: {
     get: vi.fn(),
     delete: vi.fn(),
+    post: vi.fn(),
+    isAxiosError: vi.fn(),
+    defaults: {},
   },
 }));
 
@@ -83,14 +95,41 @@ const mockZonesResponse = {
   },
 };
 
+function openDividendYieldTab() {
+  fireEvent.click(screen.getByRole('tab', { name: '股息率分析' }));
+}
+
+function getDividendYieldForm() {
+  const stockInput = screen.getByLabelText('股票代码');
+  const form = stockInput.closest('form');
+  if (!form) throw new Error('Dividend yield form not found');
+  return form;
+}
+
 function submitDefaultQuery() {
-  fireEvent.change(screen.getAllByPlaceholderText('例如 600519 或 600519.SH')[0], {
-    target: { value: '600519' },
-  });
-  fireEvent.submit(document.querySelector('form') as HTMLFormElement);
+  openDividendYieldTab();
+  const stockInput = screen.getByLabelText('股票代码');
+  fireEvent.change(stockInput, { target: { value: '600519' } });
+  fireEvent.submit(getDividendYieldForm());
 }
 
 describe('App Component', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(axios.get).mockImplementation((url: string) => {
+      if (url === '/api/health') {
+        return Promise.resolve({ data: { features: { secRoe: true } } });
+      }
+      if (url.includes('dividend-yield-zones')) {
+        return Promise.resolve(mockZonesResponse);
+      }
+      if (url.includes('history')) {
+        return Promise.resolve(mockHistoryResponse);
+      }
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
+    });
+  });
+
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
@@ -99,13 +138,14 @@ describe('App Component', () => {
   });
 
   it('renders the dashboard title', () => {
-    const { container } = render(<App />);
+    const { container } = renderApp();
     expect(screen.getByText('A股可视化仪表盘')).toBeDefined();
     expect(container.querySelector('.app-shell')).toBeDefined();
   });
 
   it('keeps the default forward-adjusted price display in advanced options with denominator guidance', () => {
-    render(<App />);
+    renderApp();
+    openDividendYieldTab();
 
     expect(screen.getAllByText('高级选项').length).toBeGreaterThan(0);
     expect(screen.getAllByText('股价显示：前复权').length).toBeGreaterThan(0);
@@ -116,45 +156,42 @@ describe('App Component', () => {
   it('renders compact stock data source metadata', () => {
     render(
       <SourceMetadataView
-        metadata={{
-          logical_source: 'eastmoney',
-          access_layer: 'eastmoney_push2his',
-          fallback_used: true,
-          source_priority_rank: 2,
-          quality_flags: ['needs_review'],
-        }}
+        priceSource="eastmoney"
+        dividendSource="cninfo"
       />
     );
 
-    expect(screen.getByText('数据来源')).toBeDefined();
-    expect(screen.getByText('东方财富')).toBeDefined();
-    expect(screen.getByText('已降级')).toBeDefined();
-    expect(screen.getByText('needs_review')).toBeDefined();
+    expect(screen.getByText('价格源: 东方财富')).toBeDefined();
+    expect(screen.getByText('分红源: 巨潮资讯')).toBeDefined();
   });
 
   it('renders the exit zone as 清仓区 in GUI tables', () => {
-    render(
-      <App />
-    );
+    renderApp();
 
-    vi.mocked(axios.get)
-      .mockResolvedValueOnce(mockHistoryResponse)
-      .mockResolvedValueOnce({
-        data: {
-          ...mockZonesResponse.data,
-          stats: [
-            {
-              zoneId: 'exit',
-              label: '清仓 / 退出区',
-              tradingDays: 2,
-              tradingDayRatio: 0.2,
-              averageTradingDaysPerYear: 1,
-              occurrenceWindows: 1,
-            },
-          ],
-        },
-      });
+    vi.mocked(axios.get).mockImplementation((url: string) => {
+      if (url === '/api/health') return Promise.resolve({ data: { features: { secRoe: true } } });
+      if (url.includes('history')) return Promise.resolve(mockHistoryResponse);
+      if (url.includes('dividend-yield-zones')) {
+        return Promise.resolve({
+          data: {
+            ...mockZonesResponse.data,
+            stats: [
+              {
+                zoneId: 'exit',
+                label: '清仓 / 退出区',
+                tradingDays: 2,
+                tradingDayRatio: 0.2,
+                averageTradingDaysPerYear: 1,
+                occurrenceWindows: 1,
+              },
+            ],
+          },
+        });
+      }
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
+    });
 
+    vi.mocked(axios.get).mockClear();
     submitDefaultQuery();
 
     return waitFor(() => {
@@ -163,13 +200,17 @@ describe('App Component', () => {
     });
   });
 
-  it('asks whether to use mock data when all free history sources are unavailable', async () => {
-    vi.mocked(axios.get).mockRejectedValueOnce({
-      response: { data: { error: '所有免费数据源均不可用' } },
+  it('prompts to use mock data when provider exhaustion occurs', async () => {
+    vi.mocked(axios.get).mockImplementation((url: string) => {
+      if (url === '/api/health') return Promise.resolve({ data: { features: { secRoe: true } } });
+      if (url.includes('history')) return Promise.reject({ response: { data: { error: '所有免费数据源均不可用' } } });
+      if (url.includes('dividend-yield-zones')) return Promise.resolve(mockZonesResponse);
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
     });
     const confirmSpy = vi.spyOn(Modal, 'confirm').mockImplementation(() => ({ destroy: vi.fn(), update: vi.fn() }) as any);
 
-    render(<App />);
+    renderApp();
+    vi.mocked(axios.get).mockClear();
     submitDefaultQuery();
 
     await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
@@ -181,35 +222,43 @@ describe('App Component', () => {
     }));
   });
 
-  it('retries history and zones with request-scoped mock fallback when the user confirms', async () => {
-    vi.mocked(axios.get)
-      .mockRejectedValueOnce({ response: { data: { error: '所有免费数据源均不可用' } } })
-      .mockResolvedValueOnce(mockHistoryResponse)
-      .mockResolvedValueOnce(mockZonesResponse);
+  it('successfully loads mock data when user confirms', async () => {
+    vi.mocked(axios.get).mockImplementation((url: string, config?: any) => {
+      if (url === '/api/health') return Promise.resolve({ data: { features: { secRoe: true } } });
+      if (url.includes('history')) {
+        if (config?.params?.allowMockFallback) return Promise.resolve(mockHistoryResponse);
+        return Promise.reject({ response: { data: { error: '所有免费数据源均不可用' } } });
+      }
+      if (url.includes('dividend-yield-zones')) return Promise.resolve(mockZonesResponse);
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
+    });
     let confirmOptions: any;
     vi.spyOn(Modal, 'confirm').mockImplementation(options => {
       confirmOptions = options;
       return { destroy: vi.fn(), update: vi.fn() } as any;
     });
 
-    render(<App />);
+    renderApp();
+    vi.mocked(axios.get).mockClear();
     submitDefaultQuery();
 
     await waitFor(() => expect(confirmOptions).toBeDefined());
     await confirmOptions.onOk();
 
-    await waitFor(() => expect(screen.getByText('本地模拟数据')).toBeDefined());
-    expect(vi.mocked(axios.get)).toHaveBeenNthCalledWith(2, '/api/stocks/600519/history', expect.objectContaining({
+    await waitFor(() => expect(screen.getByText(/本地模拟数据/)).toBeDefined());
+    expect(vi.mocked(axios.get)).toHaveBeenCalledWith( '/api/stocks/600519/history', expect.objectContaining({
       params: expect.objectContaining({ allowMockFallback: true, cacheTtlHours: 24 }),
     }));
-    expect(vi.mocked(axios.get)).toHaveBeenNthCalledWith(3, '/api/stocks/600519/dividend-yield-zones', expect.objectContaining({
+    expect(vi.mocked(axios.get)).toHaveBeenCalledWith( '/api/stocks/600519/dividend-yield-zones', expect.objectContaining({
       params: expect.objectContaining({ allowMockFallback: true, cacheTtlHours: 24 }),
     }));
   });
 
   it('keeps the chart blank when the user declines mock data', async () => {
-    vi.mocked(axios.get).mockRejectedValueOnce({
-      response: { data: { error: '所有免费数据源均不可用' } },
+    vi.mocked(axios.get).mockImplementation((url: string) => {
+      if (url === '/api/health') return Promise.resolve({ data: { features: { secRoe: true } } });
+      if (url.includes('history')) return Promise.reject({ response: { data: { error: '所有免费数据源均不可用' } } });
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
     });
     let confirmOptions: any;
     vi.spyOn(Modal, 'confirm').mockImplementation(options => {
@@ -217,7 +266,8 @@ describe('App Component', () => {
       return { destroy: vi.fn(), update: vi.fn() } as any;
     });
 
-    render(<App />);
+    renderApp();
+    vi.mocked(axios.get).mockClear();
     submitDefaultQuery();
 
     await waitFor(() => expect(confirmOptions).toBeDefined());
@@ -227,47 +277,40 @@ describe('App Component', () => {
   });
 
   it('keeps normal successful queries off the mock confirmation path', async () => {
-    vi.mocked(axios.get)
-      .mockResolvedValueOnce(mockHistoryResponse)
-      .mockResolvedValueOnce(mockZonesResponse);
     const confirmSpy = vi.spyOn(Modal, 'confirm').mockImplementation(() => ({ destroy: vi.fn(), update: vi.fn() }) as any);
 
-    render(<App />);
+    renderApp();
+    vi.mocked(axios.get).mockClear();
     submitDefaultQuery();
 
-    await waitFor(() => expect(screen.getByText('本地模拟数据')).toBeDefined());
+    await waitFor(() => expect(screen.getByText(/本地模拟数据/)).toBeDefined());
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it('sends the default cache TTL with stock data requests', async () => {
-    vi.mocked(axios.get)
-      .mockResolvedValueOnce(mockHistoryResponse)
-      .mockResolvedValueOnce(mockZonesResponse);
-
-    render(<App />);
+    renderApp();
+    vi.mocked(axios.get).mockClear();
     submitDefaultQuery();
 
-    await waitFor(() => expect(screen.getByText('本地模拟数据')).toBeDefined());
-    expect(vi.mocked(axios.get)).toHaveBeenNthCalledWith(1, '/api/stocks/600519/history', expect.objectContaining({
+    await waitFor(() => expect(screen.getByText(/本地模拟数据/)).toBeDefined());
+    expect(vi.mocked(axios.get)).toHaveBeenCalledWith( '/api/stocks/600519/history', expect.objectContaining({
       params: expect.objectContaining({ cacheTtlHours: 24 }),
     }));
-    expect(vi.mocked(axios.get)).toHaveBeenNthCalledWith(2, '/api/stocks/600519/dividend-yield-zones', expect.objectContaining({
+    expect(vi.mocked(axios.get)).toHaveBeenCalledWith( '/api/stocks/600519/dividend-yield-zones', expect.objectContaining({
       params: expect.objectContaining({ cacheTtlHours: 24 }),
     }));
   });
 
   it('sends the selected cache TTL with stock data requests', async () => {
-    vi.mocked(axios.get)
-      .mockResolvedValueOnce(mockHistoryResponse)
-      .mockResolvedValueOnce(mockZonesResponse);
-
-    render(<App />);
+    renderApp();
+    openDividendYieldTab();
     fireEvent.click(screen.getByText('高级选项'));
     fireEvent.change(screen.getByLabelText('缓存有效期'), { target: { value: '2' } });
+    vi.mocked(axios.get).mockClear();
     submitDefaultQuery();
 
-    await waitFor(() => expect(screen.getByText('本地模拟数据')).toBeDefined());
-    expect(vi.mocked(axios.get)).toHaveBeenNthCalledWith(1, '/api/stocks/600519/history', expect.objectContaining({
+    await waitFor(() => expect(screen.getByText(/本地模拟数据/)).toBeDefined());
+    expect(vi.mocked(axios.get)).toHaveBeenCalledWith( '/api/stocks/600519/history', expect.objectContaining({
       params: expect.objectContaining({ cacheTtlHours: 2 }),
     }));
   });
@@ -283,7 +326,7 @@ describe('App Component', () => {
       return { destroy: vi.fn(), update: vi.fn() } as any;
     });
 
-    render(<App />);
+    renderApp();
     fireEvent.click(screen.getByText('清除本地缓存'));
 
     expect(confirmOptions).toEqual(expect.objectContaining({
@@ -305,7 +348,7 @@ describe('App Component', () => {
       return { destroy: vi.fn(), update: vi.fn() } as any;
     });
 
-    render(<App />);
+    renderApp();
     fireEvent.click(screen.getByText('清除本地缓存'));
     await confirmOptions.onOk();
 
@@ -313,13 +356,17 @@ describe('App Component', () => {
   });
 
   it('uses the existing error message path for non-provider-exhaustion history errors', async () => {
-    vi.mocked(axios.get).mockRejectedValueOnce({
-      response: { data: { error: '获取数据失败' } },
+    vi.mocked(axios.get).mockImplementation((url: string) => {
+      if (url === '/api/health') return Promise.resolve({ data: { features: { secRoe: true } } });
+      if (url.includes('history')) return Promise.reject({ response: { data: { error: '获取数据失败' } } });
+      if (url.includes('dividend-yield-zones')) return Promise.resolve(mockZonesResponse);
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
     });
     const confirmSpy = vi.spyOn(Modal, 'confirm').mockImplementation(() => ({ destroy: vi.fn(), update: vi.fn() }) as any);
     const messageSpy = vi.spyOn(message, 'error').mockImplementation(() => undefined as any);
 
-    render(<App />);
+    renderApp();
+    vi.mocked(axios.get).mockClear();
     submitDefaultQuery();
 
     await waitFor(() => expect(messageSpy).toHaveBeenCalledWith('获取数据失败'));
@@ -327,14 +374,39 @@ describe('App Component', () => {
   });
 
   it('rejects malformed A-share stock codes before submitting requests', async () => {
-    render(<App />);
-
-    fireEvent.change(screen.getAllByPlaceholderText('例如 600519 或 600519.SH')[0], {
-      target: { value: '60051' },
-    });
-    fireEvent.submit(document.querySelector('form') as HTMLFormElement);
+    renderApp();
+    openDividendYieldTab();
+    const stockInput = screen.getByLabelText('股票代码');
+    fireEvent.change(stockInput, { target: { value: '60051' } });
+    fireEvent.submit(getDividendYieldForm());
 
     expect(await screen.findByText('请输入符合A股股票代码格式的代码，例如 600519 或 600519.SH')).toBeDefined();
-    expect(vi.mocked(axios.get)).not.toHaveBeenCalled();
+    expect(vi.mocked(axios.get).mock.calls.some(call => call[0].includes('/api/stocks'))).toBe(false);
+  });
+
+  it('switches to US market mode and updates placeholder', () => {
+    renderApp();
+    vi.mocked(axios.get).mockClear();
+    fireEvent.click(screen.getByText('美股'));
+    openDividendYieldTab();
+    expect(screen.getByText('美股可视化仪表盘')).toBeDefined();
+    expect(screen.getByLabelText('股票代码').getAttribute('placeholder')).toBe('例如 AAPL 或 BRK.B');
+  });
+
+  it('sends market=us with stock data requests after switching to US mode', async () => {
+
+
+    renderApp();
+    vi.mocked(axios.get).mockClear();
+    fireEvent.click(screen.getByText('美股'));
+    openDividendYieldTab();
+    const stockInput = screen.getByLabelText('股票代码');
+    fireEvent.change(stockInput, { target: { value: 'AAPL' } });
+    fireEvent.submit(getDividendYieldForm());
+
+    await waitFor(() => expect(screen.getByText(/本地模拟数据/)).toBeDefined());
+    expect(vi.mocked(axios.get)).toHaveBeenCalledWith( '/api/stocks/AAPL/history', expect.objectContaining({
+      params: expect.objectContaining({ market: 'us' }),
+    }));
   });
 });

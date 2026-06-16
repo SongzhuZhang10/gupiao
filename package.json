@@ -11,7 +11,9 @@
     "build:backend": "cd backend && npx ncc build src/index.ts -o dist",
     "build:frontend": "cd frontend && npm run build",
     "build": "npm run build:backend && npm run build:frontend",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "verify": "cd backend && npm run verify",
+    "verify:live": "cd backend && npm run verify:live"
   },
   "build": {
     "appId": "com.gupiao.app",
@@ -30,7 +32,7 @@
     "win": {
       "target": [
         {
-          "target": "zip",
+          "target": "portable",
           "arch": [
             "ia32"
           ]

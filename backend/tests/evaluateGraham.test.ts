@@ -64,6 +64,26 @@ describe('evaluateGrahamInputs', () => {
     expect(rows[0].message).toContain('可用年份');
   });
 
+  it('passes dataSourceOverride to the provider factory', async () => {
+    let capturedOverride: string | undefined;
+    const provider: GrahamStockDataProvider = {
+      getStockSnapshot: async stockCode => ({ stockCode, stockName: 'Override Co', currentPrice: 10, priceAsOfDate: '2026-06-16' }),
+      getAdjustedEpsHistory: async () => [{ year: 2020, adjustedEps: 1.0 }, { year: 2022, adjustedEps: 1.2 }],
+      getBvpsHistory: async () => [{ year: 2020, bvps: 10 }, { year: 2022, bvps: 12 }],
+      getLatestRoe: async () => ({ year: 2022, roe: 10 }),
+    };
+
+    await evaluateGrahamInputs(
+      [{ stockCode: '000001.SZ', startYear: 2020, endYear: 2022, Y: 1.71, market: 'cn', dataSourceOverride: 'eastmoney' }],
+      (market, override) => {
+        capturedOverride = override;
+        return provider;
+      }
+    );
+
+    expect(capturedOverride).toBe('eastmoney');
+  });
+
   it('returns OK row for valid mock US evaluation', async () => {
     const rows = await evaluateGrahamInputs(
       [{ stockCode: 'AAPL', startYear: 2020, endYear: 2022, Y: 1.71, market: 'us' }],
@@ -99,9 +119,10 @@ describe('evaluateGrahamInputs', () => {
         ];
         return history.filter(row => row.year >= startYear && row.year <= endYear);
       },
-      getLatestRoe: async () => {
-        throw new Error('ROE 暂不可用');
-      },
+      getLatestRoe: async () => ({
+        year: 2022,
+        roe: 15,
+      }),
     };
 
     const input = { stockCode: 'TEST', startYear: 2020, endYear: 2022, Y: 1.71 };
@@ -118,9 +139,8 @@ describe('evaluateGrahamInputs', () => {
     expect(cnRows[0].grahamPrice).toBe(usRows[0].grahamPrice);
     expect(cnRows[0].startEPS).toBe(usRows[0].startEPS);
     expect(cnRows[0].endEPS).toBe(usRows[0].endEPS);
-    expect(cnRows[0].status).toBe('WARNING');
-    expect(usRows[0].status).toBe('WARNING');
-    expect(cnRows[0].message).toBe('ROE 暂不可用');
+    expect(cnRows[0].status).toBe('OK');
+    expect(usRows[0].status).toBe('OK');
     expect(cnRows[0].bvps).toBe(13.1);
   });
 
@@ -170,6 +190,73 @@ describe('evaluateGrahamInputs', () => {
       expect(inner.counts.bvps).toBe(1);
       expect(inner.counts.roe).toBe(1);
       expect(inner.counts.snapshot).toBe(2);
+    });
+
+    it('caches snapshots separately when two stocks use different dataSourceOverride', async () => {
+      const epsRows = [
+        { year: 2020, adjustedEps: 1 },
+        { year: 2021, adjustedEps: 1.1 },
+        { year: 2022, adjustedEps: 1.21 },
+      ];
+      const bvpsRows = [
+        { year: 2020, bvps: 8 },
+        { year: 2021, bvps: 8.5 },
+        { year: 2022, bvps: 9.2 },
+      ];
+      const sharedHistoryMethods = {
+        async getAdjustedEpsHistory(_stockCode: string, startYear: number, endYear: number) {
+          return epsRows.filter(r => r.year >= startYear && r.year <= endYear);
+        },
+        async getBvpsHistory(_stockCode: string, startYear: number, endYear: number) {
+          return bvpsRows.filter(r => r.year >= startYear && r.year <= endYear);
+        },
+        async getLatestRoe() {
+          return { year: 2022, roe: 12 };
+        },
+      };
+
+      const eastmoneyInner = {
+        getStockSnapshot: vi.fn(async () => ({
+          stockCode: '600519.SH',
+          stockName: 'Eastmoney Co',
+          currentPrice: 100,
+          priceAsOfDate: '2026-06-11',
+          dataSource: 'eastmoney',
+        })),
+        ...sharedHistoryMethods,
+      };
+      const sinaInner = {
+        getStockSnapshot: vi.fn(async () => ({
+          stockCode: '000858.SZ',
+          stockName: 'Sina Co',
+          currentPrice: 99,
+          priceAsOfDate: '2026-06-11',
+          dataSource: 'sina',
+        })),
+        ...sharedHistoryMethods,
+      };
+
+      vi.spyOn(createGrahamModule, 'createGrahamDataProvider').mockImplementation((market, cacheContext, override) => {
+        const inner = override === 'eastmoney' ? eastmoneyInner : sinaInner;
+        if (!cacheContext) return inner;
+        return new CachingGrahamDataProvider(inner, market, {
+          ...cacheContext,
+          dataSourceOverride: override,
+        });
+      });
+
+      const sharedInput = { startYear: 2020, endYear: 2022, Y: 1.71, market: 'cn' as const };
+      await evaluateGrahamInputs(
+        [
+          { ...sharedInput, stockCode: '600519.SH', dataSourceOverride: 'eastmoney' },
+          { ...sharedInput, stockCode: '000858.SZ', dataSourceOverride: 'sina' },
+        ],
+        undefined,
+        { refreshPolicy: 'default' }
+      );
+
+      expect(eastmoneyInner.getStockSnapshot).toHaveBeenCalledTimes(1);
+      expect(sinaInner.getStockSnapshot).toHaveBeenCalledTimes(1);
     });
   });
 

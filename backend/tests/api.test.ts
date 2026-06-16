@@ -88,6 +88,22 @@ describe('API Route /api/stocks/:tsCode/history', () => {
     expect(res.body.warnings).toContain('真实数据源不可用，当前操作区间基于 Mock 数据降级展示。');
     expect(res.body.samples.length).toBeGreaterThanOrEqual(100);
   });
+
+  it('should return 400 for malformed US stock codes when market=us', async () => {
+    const res = await request(app).get('/api/stocks/600519/history?market=us&startDate=2024-01-01&endDate=2024-01-31');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('请输入符合美股代码格式的代码，例如 AAPL 或 BRK.B');
+  });
+
+  it('should allow mock fallback for US market history requests', async () => {
+    const res = await request(app).get('/api/stocks/AAPL/history?market=us&startDate=2024-01-01&endDate=2024-01-31&allowMockFallback=true');
+
+    expect(res.status).toBe(200);
+    expect(res.body.stockCode).toBe('AAPL');
+    expect(res.body.market).toBe('us');
+    expect(res.body.dataSource).toBe('mock');
+  });
 });
 
 describe('API Route DELETE /api/cache/stocks', () => {

@@ -20,7 +20,10 @@ import { cacheTtlMsFromHours } from '../stockCache';
 import { GrahamRefreshPolicy } from './cachingGrahamDataProvider';
 import { createGrahamDataProvider } from './createGrahamDataProvider';
 
-export type GrahamProviderFactory = (market: ReturnType<typeof parseMarketRegion>) => GrahamStockDataProvider;
+export type GrahamProviderFactory = (
+  market: ReturnType<typeof parseMarketRegion>,
+  override?: string
+) => GrahamStockDataProvider;
 
 export interface EvaluateGrahamOptions {
   refreshPolicy?: GrahamRefreshPolicy;
@@ -30,11 +33,11 @@ export interface EvaluateGrahamOptions {
 export function resolveProviderFactory(options?: EvaluateGrahamOptions): GrahamProviderFactory {
   const refreshPolicy = options?.refreshPolicy ?? 'default';
   const snapshotTtlMs = cacheTtlMsFromHours(options?.cacheTtlHours);
-  return market =>
+  return (market, override) =>
     createGrahamDataProvider(market, {
       refreshPolicy,
       snapshotTtlMs,
-    });
+    }, override);
 }
 
 export async function evaluateGrahamInputs(
@@ -80,7 +83,7 @@ export async function evaluateGrahamInputs(
       baseRow.stockCode = normalizedCode;
       validateInput(input);
 
-      const dataProvider = factory(market);
+      const dataProvider = factory(market, rawInput.dataSourceOverride);
       const snapshot = await dataProvider.getStockSnapshot(input.stockCode);
       baseRow.stockName = snapshot.stockName;
       baseRow.currentPrice = snapshot.currentPrice;
@@ -109,13 +112,8 @@ export async function evaluateGrahamInputs(
       const effectiveStartYear = resolvedYears.startYear;
       const effectiveEndYear = resolvedYears.endYear;
 
-      try {
-        const latestRoe = await dataProvider.getLatestRoe(input.stockCode);
-        roeLatest = latestRoe.roe;
-      } catch (roeError: unknown) {
-        status = 'WARNING';
-        message = roeError instanceof Error ? roeError.message : 'ROE 暂不可用';
-      }
+      const latestRoe = await dataProvider.getLatestRoe(input.stockCode);
+      roeLatest = latestRoe.roe;
 
       try {
         const bvpsHistory = await dataProvider.getBvpsHistory(
@@ -158,6 +156,10 @@ export async function evaluateGrahamInputs(
 
       const n = effectiveEndYear - effectiveStartYear;
       R = computeCagrRFromRoundedEps(startEPS, endEPS, n);
+
+      if (roeLatest !== undefined && R > roeLatest) {
+        R = roeLatest;
+      }
 
       const E = endEPS;
       const rGrowthCoeff = input.rGrowthCoeff ?? DEFAULT_R_GROWTH_COEFF;

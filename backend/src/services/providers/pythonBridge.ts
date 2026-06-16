@@ -1,5 +1,7 @@
 import { spawn } from 'child_process';
+import { resolvePythonBin } from '../../utils/resolvePythonBin';
 import { ProviderName } from './types';
+import { buildPythonBridgeScript } from './pythonBridgeScript';
 
 export async function runPythonProvider<T>(
   provider: ProviderName,
@@ -11,50 +13,17 @@ export async function runPythonProvider<T>(
     throw new Error(`${provider} python bridge disabled in test environment`);
   }
 
-  const script = `
-import json
-import sys
-
-provider = ${JSON.stringify(provider)}
-action = ${JSON.stringify(action)}
-payload = json.loads(sys.stdin.read())
-
-try:
-    if provider == "baostock":
-        import baostock as bs
-        if action != "daily_bars":
-            raise RuntimeError("unsupported baostock action")
-        symbol = payload["symbol"]
-        code = ("sh." if symbol.endswith(".SH") else "sz.") + symbol[:6]
-        lg = bs.login()
-        if lg.error_code != "0":
-            raise RuntimeError(lg.error_msg)
-        rs = bs.query_history_k_data_plus(
-            code,
-            "date,open,high,low,close,volume,amount",
-            start_date=payload["startDate"],
-            end_date=payload["endDate"],
-            frequency="d",
-            adjustflag="3"
-        )
-        rows = []
-        while rs.next():
-            rows.append(dict(zip(rs.fields, rs.get_row_data())))
-        bs.logout()
-        print(json.dumps(rows, ensure_ascii=False))
-    elif provider in ("akshare_generic", "cninfo"):
-        import akshare as ak
-        raise RuntimeError(f"{provider} {action} bridge is not configured for this project")
-    else:
-        raise RuntimeError(f"unsupported provider {provider}")
-except Exception as exc:
-    print(json.dumps({"error": str(exc)}, ensure_ascii=False))
-    sys.exit(1)
-`;
+  const script = buildPythonBridgeScript();
+  const stdinPayload = JSON.stringify({
+    _provider: provider,
+    _action: action,
+    _payload: payload,
+  });
 
   return await new Promise<T>((resolve, reject) => {
-    const child = spawn(process.env.PYTHON_BIN || 'python3', ['-c', script], {
+    const child = spawn(resolvePythonBin(), ['-c', script], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: process.env,
     });
     const timer = setTimeout(() => {
       child.kill();
@@ -90,6 +59,6 @@ except Exception as exc:
         reject(error);
       }
     });
-    child.stdin.end(JSON.stringify(payload));
+    child.stdin.end(stdinPayload);
   });
 }
