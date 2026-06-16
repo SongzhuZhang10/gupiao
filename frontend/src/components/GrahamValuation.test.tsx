@@ -261,6 +261,52 @@ describe('GrahamValuation cache UX', () => {
     expect(stored.stockCode).toBeUndefined();
   });
 
+  it('renders compact vertical cell content without ellipsis when columns are narrow', async () => {
+    localStorage.setItem(
+      'grahamPoolTableColumnWidths',
+      JSON.stringify({
+        stockName: 72,
+        dataSource: 96,
+        grahamPrice: 84,
+      })
+    );
+    localStorage.setItem('grahamOverrides_cn', JSON.stringify({ '600519.SH': 'sina' }));
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '贵州茅台股份有限公司',
+            currentPrice: 1500,
+            dataSource: 'eastmoney',
+            bvps: 50,
+            startEPS: 40,
+            endEPS: 60,
+            R: 10,
+            grahamPrice: 1200,
+            priceDeviationPercent: -20,
+            grahamPriceR0: 300,
+            grahamPriceR3: 660,
+            grahamPriceR5: 900,
+            roeLatest: 18,
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '2026-06-10',
+            status: 'OK',
+            message: '',
+          },
+        ],
+      },
+    });
+
+    const { container } = render(<GrahamValuation />);
+
+    await waitFor(() => expect(screen.getByText('贵州茅台股份有限公司')).toBeInTheDocument());
+    expect(container.querySelector('.graham-table-cell-stack')).toBeInTheDocument();
+    expect(container.querySelector('.graham-pool-table .ant-table-cell-ellipsis')).not.toBeInTheDocument();
+    expect(screen.getByText('东财F10')).toBeInTheDocument();
+  });
+
   it('shows table rows for stock pool codes even when valuation data is empty', async () => {
     marketState.market = 'us';
     stockPoolState.pool = ['AAPL', 'NVDA'];

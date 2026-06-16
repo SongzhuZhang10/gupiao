@@ -96,7 +96,29 @@ const US_DATA_SOURCES = [
   { label: 'Yahoo', value: 'yahoo' },
 ];
 
+interface CompactCellProps {
+  value: React.ReactNode;
+  meta?: React.ReactNode;
+  strong?: boolean;
+  valueClassName?: string;
+}
 
+const CompactCell: React.FC<CompactCellProps> = ({ value, meta, strong = false, valueClassName }) => (
+  <span className="graham-table-cell-stack">
+    <Text strong={strong} className={valueClassName}>
+      {value ?? '-'}
+    </Text>
+    {meta && (
+      <Text type="secondary" className="graham-table-cell-meta">
+        {meta}
+      </Text>
+    )}
+  </span>
+);
+
+function formatFixed(value: number | undefined, digits = 2): string {
+  return value != null ? value.toFixed(digits) : '-';
+}
 
 interface GrahamFormValues {
   startYear: number;
@@ -233,7 +255,7 @@ const ResizableHeaderCell: React.FC<ResizableHeaderCellProps> = ({
       style={{ ...style, width: columnWidth }}
     >
       <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '100%' }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{children}</span>
+        <span className="graham-resizable-header-content">{children}</span>
         {columnKey && columnTitle && columnWidth != null && (
           <span
             aria-label={`调整 ${columnTitle} 列宽`}
@@ -242,17 +264,7 @@ const ResizableHeaderCell: React.FC<ResizableHeaderCellProps> = ({
             tabIndex={0}
             onKeyDown={handleKeyDown}
             onPointerDown={handlePointerDown}
-            style={{
-              position: 'absolute',
-              top: 0,
-              right: -4,
-              width: 8,
-              height: '100%',
-              cursor: 'col-resize',
-              touchAction: 'none',
-              userSelect: 'none',
-              zIndex: 1,
-            }}
+            className="graham-column-resize-handle"
           />
         )}
       </div>
@@ -683,6 +695,7 @@ export const GrahamValuation: React.FC = () => {
         key: 'stockCode',
         fixed: 'left' as const,
         ...resizableHeader('stockCode', '代码'),
+        render: (text: string) => <CompactCell value={text} />,
       },
       {
         title: '名称',
@@ -690,50 +703,51 @@ export const GrahamValuation: React.FC = () => {
         key: 'stockName',
         fixed: 'left' as const,
         ...resizableHeader('stockName', '名称'),
-        render: (text: string) => <Text strong>{text || '-'}</Text>,
+        render: (text: string, row: ValuationRow) => <CompactCell value={text || '-'} meta={row.stockCode} strong />,
       },
       {
         title: 'BVPS',
         dataIndex: 'bvps',
         key: 'bvps',
         ...resizableHeader('bvps', 'BVPS'),
-        render: (v: number) => (v != null ? v.toFixed(2) : '-'),
+        render: (v: number) => <CompactCell value={formatFixed(v)} />,
       },
       {
         title: '最近收盘价',
         dataIndex: 'currentPrice',
         key: 'currentPrice',
         ...resizableHeader('currentPrice', '最近收盘价'),
-        render: (v: number) => v?.toFixed(2),
+        render: (v: number) => <CompactCell value={formatFixed(v)} />,
       },
       {
         title: 'Beg. Adj. EPS',
         dataIndex: 'startEPS',
         key: 'startEPS',
         ...resizableHeader('startEPS', 'Beg. Adj. EPS'),
-        render: (v: number) => v?.toFixed(2),
+        render: (v: number, row: ValuationRow) => <CompactCell value={formatFixed(v)} meta={row.startYear} />,
       },
       {
         title: 'End. Adj. EPS',
         dataIndex: 'endEPS',
         key: 'endEPS',
         ...resizableHeader('endEPS', 'End. Adj. EPS'),
-        render: (v: number) => v?.toFixed(2),
+        render: (v: number, row: ValuationRow) => <CompactCell value={formatFixed(v)} meta={row.endYear} />,
       },
       {
         title: 'R(%)',
         dataIndex: 'R',
         key: 'R',
         ...resizableHeader('R', 'R(%)'),
-        render: (v: number) => (v != null ? v.toFixed(0) : '-'),
+        render: (v: number) => <CompactCell value={formatFixed(v, 0)} />,
       },
       {
         title: 'Graham Price',
         dataIndex: 'grahamPrice',
         key: 'grahamPrice',
         ...resizableHeader('grahamPrice', 'Graham Price'),
-        render: (v: number) =>
-          v != null ? <Text strong style={{ color: '#38bdf8' }}>{v.toFixed(2)}</Text> : '-',
+        render: (v: number) => (
+          <CompactCell value={formatFixed(v)} strong valueClassName="graham-price-cell-value" />
+        ),
       },
       {
         title: '偏离率',
@@ -741,14 +755,9 @@ export const GrahamValuation: React.FC = () => {
         key: 'priceDeviationPercent',
         ...resizableHeader('priceDeviationPercent', '偏离率'),
         render: (v: number) => {
-          if (v == null) return '-';
-          const color = v > 0 ? '#ef4444' : '#10b981';
-          return (
-            <span style={{ color, fontWeight: 500 }}>
-              {v > 0 ? '+' : ''}
-              {v.toFixed(0)}%
-            </span>
-          );
+          if (v == null) return <CompactCell value="-" />;
+          const className = v > 0 ? 'graham-deviation-positive' : 'graham-deviation-negative';
+          return <CompactCell value={`${v > 0 ? '+' : ''}${v.toFixed(0)}%`} strong valueClassName={className} />;
         },
       },
       {
@@ -756,28 +765,28 @@ export const GrahamValuation: React.FC = () => {
         dataIndex: 'grahamPriceR0',
         key: 'grahamPriceR0',
         ...resizableHeader('grahamPriceR0', 'R=0'),
-        render: (v: number) => <Text type="secondary">{v?.toFixed(2)}</Text>,
+        render: (v: number) => <CompactCell value={formatFixed(v)} valueClassName="ant-typography-secondary" />,
       },
       {
         title: 'R=3',
         dataIndex: 'grahamPriceR3',
         key: 'grahamPriceR3',
         ...resizableHeader('grahamPriceR3', 'R=3'),
-        render: (v: number) => <Text type="secondary">{v?.toFixed(2)}</Text>,
+        render: (v: number) => <CompactCell value={formatFixed(v)} valueClassName="ant-typography-secondary" />,
       },
       {
         title: 'R=5',
         dataIndex: 'grahamPriceR5',
         key: 'grahamPriceR5',
         ...resizableHeader('grahamPriceR5', 'R=5'),
-        render: (v: number) => <Text type="secondary">{v?.toFixed(2)}</Text>,
+        render: (v: number) => <CompactCell value={formatFixed(v)} valueClassName="ant-typography-secondary" />,
       },
       {
         title: 'ROE',
         dataIndex: 'roeLatest',
         key: 'roeLatest',
         ...resizableHeader('roeLatest', 'ROE'),
-        render: (v: number) => (v != null ? `${v.toFixed(0)}%` : '-'),
+        render: (v: number) => <CompactCell value={v != null ? `${v.toFixed(0)}%` : '-'} />,
       },
       {
         title: '状态',
@@ -818,19 +827,23 @@ export const GrahamValuation: React.FC = () => {
           const options = market === 'us' ? US_DATA_SOURCES : CN_DATA_SOURCES;
 
           return (
-            <Select
-              size="small"
-              value={currentOverride}
-              onChange={(val) => handleDataSourceOverrideChange(r.stockCode, val)}
-              options={options}
-              labelRender={opt => {
-                if (opt.value === '' || opt.value == null) return resolvedName;
-                return opt.label;
-              }}
-              style={{ width: '100%' }}
-              dropdownMatchSelectWidth={false}
-              bordered={false}
-            />
+            <span className="graham-table-cell-stack">
+              <Text className="graham-table-cell-value">{resolvedName}</Text>
+              <Select
+                aria-label={`选择 ${r.stockCode} 数据源`}
+                size="small"
+                value={currentOverride}
+                onChange={(val) => handleDataSourceOverrideChange(r.stockCode, val)}
+                options={options}
+                labelRender={opt => {
+                  if (opt.value === '' || opt.value == null) return '自动';
+                  return opt.label;
+                }}
+                style={{ width: '100%', minWidth: 0 }}
+                dropdownMatchSelectWidth={false}
+                bordered={false}
+              />
+            </span>
           );
         },
       },
