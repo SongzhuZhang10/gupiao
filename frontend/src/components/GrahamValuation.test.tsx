@@ -53,6 +53,7 @@ describe('GrahamValuation cache UX', () => {
   beforeEach(() => {
     marketState.market = 'cn';
     stockPoolState.pool = ['600519.SH'];
+    localStorage.clear();
     message.destroy();
     vi.mocked(axios.post).mockReset();
     vi.mocked(axios.post).mockResolvedValue({ data: { rows: [] } });
@@ -175,6 +176,60 @@ describe('GrahamValuation cache UX', () => {
     await waitFor(() => expect(screen.getByText('茅台')).toBeInTheDocument());
     const handles = container.querySelectorAll('[data-testid="drag-handle"]');
     expect(handles.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('uses persisted stock pool table column widths', async () => {
+    localStorage.setItem('grahamPoolTableColumnWidths', JSON.stringify({ stockCode: 148 }));
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '贵州茅台',
+            currentPrice: 1500,
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '2026-06-10',
+            status: 'OK',
+            message: '',
+          },
+        ],
+      },
+    });
+
+    render(<GrahamValuation />);
+
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: /代码/ })).toBeInTheDocument());
+    expect(screen.getByRole('columnheader', { name: /代码/ })).toHaveStyle({ width: '148px' });
+  });
+
+  it('persists resized stock pool table column width when dragging header handle', async () => {
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '贵州茅台',
+            currentPrice: 1500,
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '2026-06-10',
+            status: 'OK',
+            message: '',
+          },
+        ],
+      },
+    });
+
+    render(<GrahamValuation />);
+
+    const handle = await screen.findByLabelText('调整 代码 列宽');
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 });
+    fireEvent.pointerMove(window, { clientX: 136, pointerId: 1 });
+    fireEvent.pointerUp(window, { pointerId: 1 });
+
+    const stored = JSON.parse(localStorage.getItem('grahamPoolTableColumnWidths') || '{}') as Record<string, number>;
+    expect(stored.stockCode).toBe(132);
   });
 
   it('shows table rows for stock pool codes even when valuation data is empty', async () => {

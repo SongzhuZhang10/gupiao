@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback, useContext, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import { Card, Table, Typography, Space, Button, message, Tooltip, Input, Row, Col, Form, InputNumber, Modal, Tag, Select } from 'antd';
+import type { TableProps } from 'antd';
 import {
   InfoCircleOutlined,
   DeleteOutlined,
@@ -39,6 +40,12 @@ import {
   sortValuationRowsByDeviationAsc,
 } from '../utils/sortGrahamPoolByDeviation';
 import { readStockPool, writeStockPool } from '../utils/grahamStockPool';
+import {
+  clampGrahamTableColumnWidth,
+  readGrahamTableColumnWidths,
+  writeGrahamTableColumnWidths,
+  type GrahamTableColumnKey,
+} from '../utils/grahamTableColumnWidths';
 import { orderValuationRowsByPool } from '../utils/orderValuationRowsByPool';
 import { DEFAULT_R_GROWTH_COEFF, recalcValuationPrices } from '../utils/grahamFormula';
 import { AUTO_RETRY_DELAY_MS, pickAutoRetryCodes } from '../utils/grahamRetryPolicy';
@@ -145,6 +152,104 @@ const DragHandle: React.FC = () => {
   );
 };
 
+interface ResizableHeaderCellProps extends React.ThHTMLAttributes<HTMLTableCellElement> {
+  columnKey?: GrahamTableColumnKey;
+  columnTitle?: string;
+  columnWidth?: number;
+  onResizeColumn?: (key: GrahamTableColumnKey, width: number) => void;
+}
+
+const COLUMN_RESIZE_KEYBOARD_STEP = 8;
+
+const ResizableHeaderCell: React.FC<ResizableHeaderCellProps> = ({
+  columnKey,
+  columnTitle,
+  columnWidth,
+  onResizeColumn,
+  children,
+  style,
+  ...restProps
+}) => {
+  const cleanupDragRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => {
+    cleanupDragRef.current?.();
+  }, []);
+
+  const resizeTo = useCallback((nextWidth: number) => {
+    if (!columnKey || !onResizeColumn) return;
+    onResizeColumn(columnKey, nextWidth);
+  }, [columnKey, onResizeColumn]);
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLSpanElement>) => {
+    if (!columnKey || !onResizeColumn || columnWidth == null) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startWidth = columnWidth;
+
+    const cleanup = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      cleanupDragRef.current = null;
+    };
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      resizeTo(startWidth + moveEvent.clientX - startX);
+    };
+    const handlePointerUp = () => {
+      cleanup();
+    };
+
+    cleanupDragRef.current?.();
+    cleanupDragRef.current = cleanup;
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLSpanElement>) => {
+    if (columnWidth == null) return;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    event.stopPropagation();
+    const direction = event.key === 'ArrowRight' ? 1 : -1;
+    resizeTo(columnWidth + direction * COLUMN_RESIZE_KEYBOARD_STEP);
+  };
+
+  return (
+    <th
+      {...restProps}
+      aria-label={columnTitle || restProps['aria-label']}
+      style={{ ...style, width: columnWidth }}
+    >
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '100%' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{children}</span>
+        {columnKey && columnTitle && columnWidth != null && (
+          <span
+            aria-label={`调整 ${columnTitle} 列宽`}
+            aria-orientation="vertical"
+            role="separator"
+            tabIndex={0}
+            onKeyDown={handleKeyDown}
+            onPointerDown={handlePointerDown}
+            style={{
+              position: 'absolute',
+              top: 0,
+              right: -4,
+              width: 8,
+              height: '100%',
+              cursor: 'col-resize',
+              touchAction: 'none',
+              userSelect: 'none',
+              zIndex: 1,
+            }}
+          />
+        )}
+      </div>
+    </th>
+  );
+};
+
 function parseGrahamFormValues(saved: string | null): GrahamFormValues | null {
   if (!saved) return null;
   try {
@@ -173,6 +278,7 @@ export const GrahamValuation: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ValuationRow[]>([]);
   const [stockPool, setStockPool] = useState<string[]>(() => readStockPool(market));
+  const [columnWidths, setColumnWidths] = useState(() => readGrahamTableColumnWidths());
 
   const [initialParams] = useState<GrahamFormValues>(() => {
     const saved = parseGrahamFormValues(localStorage.getItem('grahamGlobalParams'));
@@ -207,6 +313,16 @@ export const GrahamValuation: React.FC = () => {
     },
     [market]
   );
+
+  const handleColumnResize = useCallback((key: GrahamTableColumnKey, width: number) => {
+    setColumnWidths(prev => {
+      const nextWidth = clampGrahamTableColumnWidth(key, width);
+      if (prev[key] === nextWidth) return prev;
+      const next = { ...prev, [key]: nextWidth };
+      writeGrahamTableColumnWidths(next);
+      return next;
+    });
+  }, []);
 
   const getGrahamParams = useCallback((): GrahamFormValues => {
     const values = form.getFieldsValue();
@@ -531,51 +647,81 @@ export const GrahamValuation: React.FC = () => {
   };
 
   const columns = useMemo(
-    () => [
+    (): NonNullable<TableProps<ValuationRow>['columns']> => {
+      const resizableHeader = (key: GrahamTableColumnKey, title: string) => ({
+        width: columnWidths[key],
+        onHeaderCell: () => ({
+          style: { width: columnWidths[key] },
+          columnKey: key,
+          columnTitle: title,
+          columnWidth: columnWidths[key],
+          onResizeColumn: handleColumnResize,
+        } as React.ThHTMLAttributes<HTMLTableCellElement>),
+      });
+
+      return [
       {
+        title: '',
         key: 'sort',
-        width: 40,
+        ...resizableHeader('sort', '排序'),
         fixed: 'left' as const,
         render: () => <DragHandle />,
       },
-      { title: '代码', dataIndex: 'stockCode', key: 'stockCode', fixed: 'left' as const, width: 80 },
+      {
+        title: '代码',
+        dataIndex: 'stockCode',
+        key: 'stockCode',
+        fixed: 'left' as const,
+        ...resizableHeader('stockCode', '代码'),
+      },
       {
         title: '名称',
         dataIndex: 'stockName',
         key: 'stockName',
         fixed: 'left' as const,
-        width: 90,
+        ...resizableHeader('stockName', '名称'),
         render: (text: string) => <Text strong>{text || '-'}</Text>,
       },
       {
         title: 'BVPS',
         dataIndex: 'bvps',
         key: 'bvps',
+        ...resizableHeader('bvps', 'BVPS'),
         render: (v: number) => (v != null ? v.toFixed(2) : '-'),
       },
-      { title: '最近收盘价', dataIndex: 'currentPrice', key: 'currentPrice', render: (v: number) => v?.toFixed(2) },
+      {
+        title: '最近收盘价',
+        dataIndex: 'currentPrice',
+        key: 'currentPrice',
+        ...resizableHeader('currentPrice', '最近收盘价'),
+        render: (v: number) => v?.toFixed(2),
+      },
       {
         title: 'Beg. Adj. EPS',
         dataIndex: 'startEPS',
         key: 'startEPS',
+        ...resizableHeader('startEPS', 'Beg. Adj. EPS'),
         render: (v: number) => v?.toFixed(2),
       },
       {
         title: 'End. Adj. EPS',
         dataIndex: 'endEPS',
         key: 'endEPS',
+        ...resizableHeader('endEPS', 'End. Adj. EPS'),
         render: (v: number) => v?.toFixed(2),
       },
       {
         title: 'R(%)',
         dataIndex: 'R',
         key: 'R',
+        ...resizableHeader('R', 'R(%)'),
         render: (v: number) => (v != null ? v.toFixed(0) : '-'),
       },
       {
         title: 'Graham Price',
         dataIndex: 'grahamPrice',
         key: 'grahamPrice',
+        ...resizableHeader('grahamPrice', 'Graham Price'),
         render: (v: number) =>
           v != null ? <Text strong style={{ color: '#38bdf8' }}>{v.toFixed(2)}</Text> : '-',
       },
@@ -583,6 +729,7 @@ export const GrahamValuation: React.FC = () => {
         title: '偏离率',
         dataIndex: 'priceDeviationPercent',
         key: 'priceDeviationPercent',
+        ...resizableHeader('priceDeviationPercent', '偏离率'),
         render: (v: number) => {
           if (v == null) return '-';
           const color = v > 0 ? '#ef4444' : '#10b981';
@@ -598,31 +745,35 @@ export const GrahamValuation: React.FC = () => {
         title: 'R=0',
         dataIndex: 'grahamPriceR0',
         key: 'grahamPriceR0',
+        ...resizableHeader('grahamPriceR0', 'R=0'),
         render: (v: number) => <Text type="secondary">{v?.toFixed(2)}</Text>,
       },
       {
         title: 'R=3',
         dataIndex: 'grahamPriceR3',
         key: 'grahamPriceR3',
+        ...resizableHeader('grahamPriceR3', 'R=3'),
         render: (v: number) => <Text type="secondary">{v?.toFixed(2)}</Text>,
       },
       {
         title: 'R=5',
         dataIndex: 'grahamPriceR5',
         key: 'grahamPriceR5',
+        ...resizableHeader('grahamPriceR5', 'R=5'),
         render: (v: number) => <Text type="secondary">{v?.toFixed(2)}</Text>,
       },
       {
         title: 'ROE',
         dataIndex: 'roeLatest',
         key: 'roeLatest',
+        ...resizableHeader('roeLatest', 'ROE'),
         render: (v: number) => (v != null ? `${v.toFixed(0)}%` : '-'),
       },
       {
         title: '状态',
         dataIndex: 'status',
         key: 'status',
-        width: 88,
+        ...resizableHeader('status', '状态'),
         fixed: 'right' as const,
         render: (status: ValuationRow['status'], row: ValuationRow) => (
           <Tooltip title={formatGrahamStatusMessage(row)}>
@@ -637,7 +788,7 @@ export const GrahamValuation: React.FC = () => {
         title: '数据源',
         dataIndex: 'dataSource',
         key: 'dataSource',
-        width: 120,
+        ...resizableHeader('dataSource', '数据源'),
         render: (text: string, r: ValuationRow) => {
           const currentOverride = dataSourceOverrides[r.stockCode] || '';
           const nameMap: Record<string, string> = {
@@ -676,7 +827,7 @@ export const GrahamValuation: React.FC = () => {
       {
         title: '操作',
         key: 'action',
-        width: 96,
+        ...resizableHeader('action', '操作'),
         fixed: 'right' as const,
         render: (_: unknown, r: ValuationRow) => (
           <Space size={4}>
@@ -702,8 +853,9 @@ export const GrahamValuation: React.FC = () => {
           </Space>
         ),
       },
-    ],
-    [retryingCodes, dataSourceOverrides, market]
+    ];
+    },
+    [retryingCodes, dataSourceOverrides, market, columnWidths, handleColumnResize]
   );
 
   return (
@@ -851,13 +1003,14 @@ export const GrahamValuation: React.FC = () => {
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={displayRows.map(r => r.stockCode)} strategy={verticalListSortingStrategy}>
             <Table
+              className="graham-pool-table"
               dataSource={displayRows}
               columns={columns}
               rowKey="stockCode"
               pagination={false}
               scroll={{ x: 'max-content' }}
               size="middle"
-              components={{ body: { row: SortableRow } }}
+              components={{ header: { cell: ResizableHeaderCell }, body: { row: SortableRow } }}
               locale={{ emptyText: '暂无数据，请在上方添加股票' }}
             />
           </SortableContext>
