@@ -270,7 +270,6 @@ describe('GrahamValuation cache UX', () => {
         grahamPrice: 84,
       })
     );
-    localStorage.setItem('grahamOverrides_cn', JSON.stringify({ '600519.SH': 'sina' }));
     vi.mocked(axios.post).mockResolvedValue({
       data: {
         rows: [
@@ -305,6 +304,32 @@ describe('GrahamValuation cache UX', () => {
     expect(container.querySelector('.graham-table-cell-stack')).toBeInTheDocument();
     expect(container.querySelector('.graham-pool-table .ant-table-cell-ellipsis')).not.toBeInTheDocument();
     expect(screen.getByText('东财F10')).toBeInTheDocument();
+    expect(screen.getAllByText('东财F10')).toHaveLength(1);
+  });
+
+  it('shows data source only once in the dropdown selector', async () => {
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '贵州茅台',
+            currentPrice: 1500,
+            dataSource: 'baostock',
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '2026-06-10',
+            status: 'OK',
+            message: '',
+          },
+        ],
+      },
+    });
+
+    render(<GrahamValuation />);
+
+    await waitFor(() => expect(screen.getByText('BaoStock')).toBeInTheDocument());
+    expect(screen.getAllByText('BaoStock')).toHaveLength(1);
   });
 
   it('shows table rows for stock pool codes even when valuation data is empty', async () => {

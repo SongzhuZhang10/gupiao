@@ -112,16 +112,18 @@ code {
 }
 
 .graham-resizable-header-content {
-  display: inline-flex;
+  display: block;
   min-width: 0;
-  padding-inline-end: 8px;
+  padding-inline-end: 12px;
 }
 
 .graham-column-resize-handle {
   position: absolute;
-  inset-block: 0;
-  inset-inline-end: -5px;
-  width: 10px;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  transform: translateX(50%);
   cursor: col-resize;
   touch-action: none;
   z-index: 3;
@@ -130,8 +132,10 @@ code {
 .graham-column-resize-handle::after {
   content: '';
   position: absolute;
-  inset-block: 8px;
-  inset-inline-start: 4px;
+  top: 8px;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
   width: 2px;
   border-radius: 999px;
   background: transparent;

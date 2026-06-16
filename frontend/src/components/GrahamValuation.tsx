@@ -269,20 +269,18 @@ const ResizableHeaderCell: React.FC<ResizableHeaderCellProps> = ({
       aria-label={columnTitle || restProps['aria-label']}
       style={{ ...style, width: columnWidth }}
     >
-      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '100%' }}>
-        <span className="graham-resizable-header-content">{children}</span>
-        {columnKey && columnTitle && columnWidth != null && (
-          <span
-            aria-label={`调整 ${columnTitle} 列宽`}
-            aria-orientation="vertical"
-            role="separator"
-            tabIndex={0}
-            onKeyDown={handleKeyDown}
-            onPointerDown={handlePointerDown}
-            className="graham-column-resize-handle"
-          />
-        )}
-      </div>
+      <span className="graham-resizable-header-content">{children}</span>
+      {columnKey && columnTitle && columnWidth != null && (
+        <span
+          aria-label={`调整 ${columnTitle} 列宽`}
+          aria-orientation="vertical"
+          role="separator"
+          tabIndex={0}
+          onKeyDown={handleKeyDown}
+          onPointerDown={handlePointerDown}
+          className="graham-column-resize-handle"
+        />
+      )}
     </th>
   );
 };
@@ -739,18 +737,14 @@ export const GrahamValuation: React.FC = () => {
         dataIndex: 'startEPS',
         key: 'startEPS',
         ...resizableHeader('startEPS', 'Beg. Adj. EPS'),
-        render: (v: number, row: ValuationRow) => (
-          <CompactCell value={formatFixed(v)} meta={row.startYear} emptyDisplay={null} />
-        ),
+        render: (v: number) => <CompactCell value={formatFixed(v)} emptyDisplay={null} />,
       },
       {
         title: 'End. Adj. EPS',
         dataIndex: 'endEPS',
         key: 'endEPS',
         ...resizableHeader('endEPS', 'End. Adj. EPS'),
-        render: (v: number, row: ValuationRow) => (
-          <CompactCell value={formatFixed(v)} meta={row.endYear} emptyDisplay={null} />
-        ),
+        render: (v: number) => <CompactCell value={formatFixed(v)} emptyDisplay={null} />,
       },
       {
         title: 'R(%)',
@@ -850,7 +844,6 @@ export const GrahamValuation: React.FC = () => {
 
           return (
             <span className="graham-table-cell-stack">
-              <Text className="graham-table-cell-value">{resolvedName}</Text>
               <Select
                 aria-label={`选择 ${r.stockCode} 数据源`}
                 size="small"
@@ -858,7 +851,7 @@ export const GrahamValuation: React.FC = () => {
                 onChange={(val) => handleDataSourceOverrideChange(r.stockCode, val)}
                 options={options}
                 labelRender={opt => {
-                  if (opt.value === '' || opt.value == null) return '自动';
+                  if (opt.value === '' || opt.value == null) return resolvedName;
                   return opt.label;
                 }}
                 style={{ width: '100%', minWidth: 0 }}
