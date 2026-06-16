@@ -100,24 +100,39 @@ interface CompactCellProps {
   value: React.ReactNode;
   meta?: React.ReactNode;
   strong?: boolean;
+  secondary?: boolean;
   valueClassName?: string;
+  emptyDisplay?: React.ReactNode;
 }
 
-const CompactCell: React.FC<CompactCellProps> = ({ value, meta, strong = false, valueClassName }) => (
-  <span className="graham-table-cell-stack">
-    <Text strong={strong} className={valueClassName}>
-      {value ?? '-'}
-    </Text>
-    {meta && (
-      <Text type="secondary" className="graham-table-cell-meta">
-        {meta}
-      </Text>
-    )}
-  </span>
-);
+const CompactCell: React.FC<CompactCellProps> = ({
+  value,
+  meta,
+  strong = false,
+  secondary = false,
+  valueClassName,
+  emptyDisplay = '-',
+}) => {
+  const displayValue = value != null && value !== '' ? value : emptyDisplay;
 
-function formatFixed(value: number | undefined, digits = 2): string {
-  return value != null ? value.toFixed(digits) : '-';
+  return (
+    <span className="graham-table-cell-stack">
+      {displayValue != null && displayValue !== '' && (
+        <Text strong={strong} type={secondary ? 'secondary' : undefined} className={valueClassName}>
+          {displayValue}
+        </Text>
+      )}
+      {meta != null && meta !== '' && (
+        <Text type="secondary" className="graham-table-cell-meta">
+          {meta}
+        </Text>
+      )}
+    </span>
+  );
+};
+
+function formatFixed(value: number | undefined, digits = 2): string | null {
+  return value != null ? value.toFixed(digits) : null;
 }
 
 interface GrahamFormValues {
@@ -703,35 +718,39 @@ export const GrahamValuation: React.FC = () => {
         key: 'stockName',
         fixed: 'left' as const,
         ...resizableHeader('stockName', '名称'),
-        render: (text: string, row: ValuationRow) => <CompactCell value={text || '-'} meta={row.stockCode} strong />,
+        render: (text: string) => <CompactCell value={text || '-'} strong />,
       },
       {
         title: 'BVPS',
         dataIndex: 'bvps',
         key: 'bvps',
         ...resizableHeader('bvps', 'BVPS'),
-        render: (v: number) => <CompactCell value={formatFixed(v)} />,
+        render: (v: number) => <CompactCell value={formatFixed(v)} emptyDisplay={null} />,
       },
       {
         title: '最近收盘价',
         dataIndex: 'currentPrice',
         key: 'currentPrice',
         ...resizableHeader('currentPrice', '最近收盘价'),
-        render: (v: number) => <CompactCell value={formatFixed(v)} />,
+        render: (v: number) => <CompactCell value={formatFixed(v)} emptyDisplay={null} />,
       },
       {
         title: 'Beg. Adj. EPS',
         dataIndex: 'startEPS',
         key: 'startEPS',
         ...resizableHeader('startEPS', 'Beg. Adj. EPS'),
-        render: (v: number, row: ValuationRow) => <CompactCell value={formatFixed(v)} meta={row.startYear} />,
+        render: (v: number, row: ValuationRow) => (
+          <CompactCell value={formatFixed(v)} meta={row.startYear} emptyDisplay={null} />
+        ),
       },
       {
         title: 'End. Adj. EPS',
         dataIndex: 'endEPS',
         key: 'endEPS',
         ...resizableHeader('endEPS', 'End. Adj. EPS'),
-        render: (v: number, row: ValuationRow) => <CompactCell value={formatFixed(v)} meta={row.endYear} />,
+        render: (v: number, row: ValuationRow) => (
+          <CompactCell value={formatFixed(v)} meta={row.endYear} emptyDisplay={null} />
+        ),
       },
       {
         title: 'R(%)',
@@ -745,9 +764,12 @@ export const GrahamValuation: React.FC = () => {
         dataIndex: 'grahamPrice',
         key: 'grahamPrice',
         ...resizableHeader('grahamPrice', 'Graham Price'),
-        render: (v: number) => (
-          <CompactCell value={formatFixed(v)} strong valueClassName="graham-price-cell-value" />
-        ),
+        render: (v: number) =>
+          v != null ? (
+            <CompactCell value={formatFixed(v)} strong valueClassName="graham-price-cell-value" />
+          ) : (
+            <CompactCell value="-" />
+          ),
       },
       {
         title: '偏离率',
@@ -765,21 +787,21 @@ export const GrahamValuation: React.FC = () => {
         dataIndex: 'grahamPriceR0',
         key: 'grahamPriceR0',
         ...resizableHeader('grahamPriceR0', 'R=0'),
-        render: (v: number) => <CompactCell value={formatFixed(v)} valueClassName="ant-typography-secondary" />,
+        render: (v: number) => <CompactCell value={formatFixed(v)} secondary emptyDisplay={null} />,
       },
       {
         title: 'R=3',
         dataIndex: 'grahamPriceR3',
         key: 'grahamPriceR3',
         ...resizableHeader('grahamPriceR3', 'R=3'),
-        render: (v: number) => <CompactCell value={formatFixed(v)} valueClassName="ant-typography-secondary" />,
+        render: (v: number) => <CompactCell value={formatFixed(v)} secondary emptyDisplay={null} />,
       },
       {
         title: 'R=5',
         dataIndex: 'grahamPriceR5',
         key: 'grahamPriceR5',
         ...resizableHeader('grahamPriceR5', 'R=5'),
-        render: (v: number) => <CompactCell value={formatFixed(v)} valueClassName="ant-typography-secondary" />,
+        render: (v: number) => <CompactCell value={formatFixed(v)} secondary emptyDisplay={null} />,
       },
       {
         title: 'ROE',
