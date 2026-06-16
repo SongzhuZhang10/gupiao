@@ -14,6 +14,7 @@ import {
   parseMarketRegion,
   stockCodeErrorForMarket,
 } from '../../utils/stock';
+import { resolveEffectiveGrahamYears } from '../../utils/grahamYearRange';
 import { GrahamStockDataProvider } from '../grahamDataProvider';
 import { cacheTtlMsFromHours } from '../stockCache';
 import { GrahamRefreshPolicy } from './cachingGrahamDataProvider';
@@ -84,12 +85,29 @@ export async function evaluateGrahamInputs(
       baseRow.stockName = snapshot.stockName;
       baseRow.currentPrice = snapshot.currentPrice;
       baseRow.dataAsOfDate = snapshot.priceAsOfDate;
+      baseRow.dataSource = snapshot.dataSource;
 
       const epsHistory = await dataProvider.getAdjustedEpsHistory(
         input.stockCode,
         input.startYear,
         input.endYear
       );
+
+      const fullEpsForYears = epsHistory.filter(
+        r => r.year >= input.startYear - 10 && r.year <= input.endYear + 1
+      );
+      const resolvedYears = resolveEffectiveGrahamYears(
+        fullEpsForYears.length > 0 ? fullEpsForYears : epsHistory,
+        input.startYear,
+        input.endYear
+      );
+      if (resolvedYears.adjusted) {
+        status = status === 'OK' ? 'WARNING' : status;
+        const yearNote = resolvedYears.messages.join('；');
+        message = message ? `${message}；${yearNote}` : yearNote;
+      }
+      const effectiveStartYear = resolvedYears.startYear;
+      const effectiveEndYear = resolvedYears.endYear;
 
       try {
         const latestRoe = await dataProvider.getLatestRoe(input.stockCode);
@@ -105,9 +123,9 @@ export async function evaluateGrahamInputs(
           input.startYear,
           input.endYear
         );
-        const endBvpsRecord = bvpsHistory.find(record => record.year === input.endYear);
+        const endBvpsRecord = bvpsHistory.find(record => record.year === effectiveEndYear);
         if (!endBvpsRecord) {
-          throw new Error(`缺少 ${input.endYear} 年 BVPS 数据`);
+          throw new Error(`缺少 ${effectiveEndYear} 年 BVPS 数据`);
         }
         bvps = roundEpsToTwoDecimals(endBvpsRecord.bvps);
       } catch (bvpsError: unknown) {
@@ -116,18 +134,18 @@ export async function evaluateGrahamInputs(
         message = message ? `${message}；${bvpsMessage}` : bvpsMessage;
       }
 
-      const startEpsRecord = epsHistory.find(r => r.year === input.startYear);
-      const endEpsRecord = epsHistory.find(r => r.year === input.endYear);
+      const startEpsRecord = epsHistory.find(r => r.year === effectiveStartYear);
+      const endEpsRecord = epsHistory.find(r => r.year === effectiveEndYear);
 
       const availableYears = epsHistory.map(record => record.year).join(', ');
       if (!startEpsRecord) {
         throw new Error(
-          `缺少 ${input.startYear} 年扣非 EPS 数据${availableYears ? `（可用年份: ${availableYears}）` : ''}`
+          `缺少 ${effectiveStartYear} 年扣非 EPS 数据${availableYears ? `（可用年份: ${availableYears}）` : ''}`
         );
       }
       if (!endEpsRecord) {
         throw new Error(
-          `缺少 ${input.endYear} 年扣非 EPS 数据${availableYears ? `（可用年份: ${availableYears}）` : ''}`
+          `缺少 ${effectiveEndYear} 年扣非 EPS 数据${availableYears ? `（可用年份: ${availableYears}）` : ''}`
         );
       }
 
@@ -138,7 +156,7 @@ export async function evaluateGrahamInputs(
         throw new Error('EPS 非正，CAGR 无法可靠计算');
       }
 
-      const n = input.endYear - input.startYear;
+      const n = effectiveEndYear - effectiveStartYear;
       R = computeCagrRFromRoundedEps(startEPS, endEPS, n);
 
       const E = endEPS;

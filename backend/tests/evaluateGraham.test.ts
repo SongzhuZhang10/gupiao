@@ -55,7 +55,7 @@ describe('evaluateGrahamInputs', () => {
     };
 
     const rows = await evaluateGrahamInputs(
-      [{ stockCode: 'AAPL', startYear: 2020, endYear: 2024, Y: 1.71, market: 'us' }],
+      [{ stockCode: 'AAPL', startYear: 2018, endYear: 2019, Y: 1.71, market: 'us' }],
       () => sparseProvider
     );
 
@@ -171,5 +171,43 @@ describe('evaluateGrahamInputs', () => {
       expect(inner.counts.roe).toBe(1);
       expect(inner.counts.snapshot).toBe(2);
     });
+  });
+
+  it('clamps start/end years to available EPS and returns WARNING', async () => {
+    const provider: GrahamStockDataProvider = {
+      getStockSnapshot: async stockCode => ({
+        stockCode,
+        stockName: 'New Listing Co',
+        currentPrice: 20,
+        priceAsOfDate: '2026-06-10',
+      }),
+      getAdjustedEpsHistory: async (_code, startYear, endYear) => {
+        const rows = [
+          { year: 2022, adjustedEps: 1.0 },
+          { year: 2023, adjustedEps: 1.2 },
+          { year: 2024, adjustedEps: 1.4 },
+        ];
+        return rows.filter(r => r.year >= startYear && r.year <= endYear);
+      },
+      getBvpsHistory: async (_code, startYear, endYear) => {
+        const rows = [
+          { year: 2022, bvps: 8 },
+          { year: 2023, bvps: 8.5 },
+          { year: 2024, bvps: 9 },
+        ];
+        return rows.filter(r => r.year >= startYear && r.year <= endYear);
+      },
+      getLatestRoe: async () => ({ year: 2024, roe: 12 }),
+    };
+
+    const rows = await evaluateGrahamInputs(
+      [{ stockCode: '301000.SZ', startYear: 2019, endYear: 2024, Y: 1.71, market: 'cn' }],
+      () => provider
+    );
+
+    expect(rows[0].status).toBe('WARNING');
+    expect(rows[0].startEPS).toBe(1.0);
+    expect(rows[0].endEPS).toBe(1.4);
+    expect(rows[0].message).toContain('起始年已从 2019 调整为');
   });
 });
