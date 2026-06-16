@@ -296,4 +296,49 @@ describe('GrahamValuation cache UX', () => {
     render(<GrahamValuation />);
     await waitFor(() => expect(screen.getByText('失败')).toBeInTheDocument());
   });
+
+  it('retries a single failed row when clicking row retry button', async () => {
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({
+        data: {
+          rows: [
+            {
+              stockCode: '600519.SH',
+              stockName: '',
+              currentPrice: 0,
+              startYear: 2019,
+              endYear: 2024,
+              dataAsOfDate: '',
+              status: 'ERROR',
+              message: 'timeout of 8000ms exceeded',
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          rows: [
+            {
+              stockCode: '600519.SH',
+              stockName: '贵州茅台',
+              currentPrice: 1500,
+              startYear: 2019,
+              endYear: 2024,
+              dataAsOfDate: '2026-06-10',
+              status: 'OK',
+              message: '',
+              grahamPrice: 1200,
+            },
+          ],
+        },
+      });
+
+    render(<GrahamValuation />);
+    await waitFor(() => expect(screen.getByLabelText('重试 600519.SH')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('重试 600519.SH'));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(2));
+    const secondBody = vi.mocked(axios.post).mock.calls[1][1] as { inputs: Array<{ stockCode: string }> };
+    expect(secondBody.inputs).toHaveLength(1);
+    expect(secondBody.inputs[0].stockCode).toBe('600519.SH');
+  });
 });

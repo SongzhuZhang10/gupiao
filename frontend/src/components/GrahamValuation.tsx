@@ -45,6 +45,7 @@ import {
   formatGrahamStatusMessage,
   grahamStatusLabel,
   grahamStatusTagColor,
+  isGrahamRowRetryable,
 } from '../utils/grahamRowStatus';
 
 const { Title, Text } = Typography;
@@ -162,6 +163,7 @@ export const GrahamValuation: React.FC = () => {
   });
 
   const [newStockCode, setNewStockCode] = useState('');
+  const [retryingCodes, setRetryingCodes] = useState<Set<string>>(() => new Set());
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -414,6 +416,19 @@ export const GrahamValuation: React.FC = () => {
     setData(prev => prev.filter(r => r.stockCode !== code));
   };
 
+  const handleRetryStock = async (code: string) => {
+    setRetryingCodes(prev => new Set(prev).add(code));
+    try {
+      await fetchValuations([code], { refreshPolicy: 'fresh-prices' });
+    } finally {
+      setRetryingCodes(prev => {
+        const next = new Set(prev);
+        next.delete(code);
+        return next;
+      });
+    }
+  };
+
   const handleSortByDeviation = () => {
     if (displayRows.length < 2) {
       message.info('至少需要 2 只股票才能排序');
@@ -578,21 +593,34 @@ export const GrahamValuation: React.FC = () => {
       {
         title: '操作',
         key: 'action',
-        width: 60,
+        width: 96,
         fixed: 'right' as const,
         render: (_: unknown, r: ValuationRow) => (
-          <Tooltip title="从股票池中移除">
-            <Button
-              type="text"
-              danger
-              icon={<DeleteOutlined />}
-              onClick={() => handleRemoveStock(r.stockCode)}
-            />
-          </Tooltip>
+          <Space size={4}>
+            {isGrahamRowRetryable(r) && (
+              <Tooltip title="重新拉取该股票数据">
+                <Button
+                  type="text"
+                  aria-label={`重试 ${r.stockCode}`}
+                  icon={<ReloadOutlined />}
+                  loading={retryingCodes.has(r.stockCode)}
+                  onClick={() => void handleRetryStock(r.stockCode)}
+                />
+              </Tooltip>
+            )}
+            <Tooltip title="从股票池中移除">
+              <Button
+                type="text"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => handleRemoveStock(r.stockCode)}
+              />
+            </Tooltip>
+          </Space>
         ),
       },
     ],
-    []
+    [retryingCodes]
   );
 
   return (
