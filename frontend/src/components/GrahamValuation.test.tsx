@@ -14,16 +14,21 @@ vi.mock('axios', () => ({
     get: vi.fn(),
     post: vi.fn(),
     delete: vi.fn(),
+    isAxiosError: vi.fn(),
     defaults: {},
   },
 }));
 
+const marketState = { market: 'cn' as 'cn' | 'us' };
+
 vi.mock('../context/MarketContext', () => ({
-  useMarket: () => ({ market: 'cn' }),
+  useMarket: () => ({ market: marketState.market }),
 }));
 
+const stockPoolState = { pool: ['600519.SH'] as string[] };
+
 vi.mock('../utils/grahamStockPool', () => ({
-  readStockPool: () => ['600519.SH'],
+  readStockPool: () => stockPoolState.pool,
   writeStockPool: vi.fn(),
 }));
 
@@ -45,6 +50,8 @@ globalThis.ResizeObserver = class ResizeObserver {
 
 describe('GrahamValuation cache UX', () => {
   beforeEach(() => {
+    marketState.market = 'cn';
+    stockPoolState.pool = ['600519.SH'];
     vi.mocked(axios.post).mockResolvedValue({ data: { rows: [] } });
     vi.mocked(axios.get).mockResolvedValue({ data: { features: { secRoe: true } } });
   });
@@ -108,7 +115,7 @@ describe('GrahamValuation cache UX', () => {
     expect(body.inputs[0]?.rGrowthCoeff).toBe(2);
   });
 
-  it('shows rGrowthCoeff control and 每股净资产 column header', async () => {
+  it('shows rGrowthCoeff control and BVPS column header', async () => {
     vi.mocked(axios.post).mockResolvedValue({
       data: {
         rows: [
@@ -134,7 +141,7 @@ describe('GrahamValuation cache UX', () => {
     });
     render(<GrahamValuation />);
     await waitFor(() =>
-      expect(screen.getByRole('columnheader', { name: '每股净资产' })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'BVPS' })).toBeInTheDocument()
     );
     expect(screen.getByLabelText('R 增长系数')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'R=0 模拟' })).toBeInTheDocument();
@@ -164,11 +171,129 @@ describe('GrahamValuation cache UX', () => {
     expect(handles.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('shows table rows for stock pool codes even when valuation data is empty', async () => {
+    marketState.market = 'us';
+    stockPoolState.pool = ['AAPL', 'NVDA'];
+    vi.mocked(axios.post).mockRejectedValueOnce(new Error('network down'));
+
+    render(<GrahamValuation />);
+    await waitFor(() => expect(axios.post).toHaveBeenCalled());
+    await waitFor(() => {
+      const addButton = screen.getByRole('button', { name: /添加股票/ });
+      expect(addButton.className).not.toMatch(/ant-btn-loading/);
+    });
+
+    expect(screen.getByText('我的股票池 (2/50)')).toBeInTheDocument();
+    expect(screen.getByText('AAPL')).toBeInTheDocument();
+    expect(screen.getByText('NVDA')).toBeInTheDocument();
+    expect(screen.queryByText('暂无数据，请在上方添加股票')).not.toBeInTheDocument();
+  });
+
+  it('re-fetches US pool codes without valuation rows instead of rejecting as duplicate', async () => {
+    marketState.market = 'us';
+    stockPoolState.pool = ['AAPL'];
+    const infoSpy = vi.spyOn(message, 'info').mockImplementation(() => undefined as never);
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({ data: { rows: [] } })
+      .mockResolvedValueOnce({
+        data: {
+          rows: [
+            {
+              stockCode: 'AAPL',
+              stockName: 'Apple',
+              currentPrice: 180,
+              startYear: 2019,
+              endYear: 2024,
+              endEPS: 2,
+              R: 5,
+              grahamPrice: 54,
+              dataAsOfDate: '2026-06-11',
+              status: 'OK',
+              message: '',
+            },
+          ],
+        },
+      });
+
+    render(<GrahamValuation />);
+    await waitFor(() => expect(axios.post).toHaveBeenCalled());
+    await waitFor(() => {
+      const addButton = screen.getByRole('button', { name: /添加股票/ });
+      expect(addButton.className).not.toMatch(/ant-btn-loading/);
+    });
+    const postCallsBeforeAdd = vi.mocked(axios.post).mock.calls.length;
+
+    const input = screen.getByPlaceholderText(/例如 AAPL 或 BRK\.B/);
+    fireEvent.change(input, { target: { value: 'AAPL' } });
+    fireEvent.click(screen.getByRole('button', { name: /添加股票/ }));
+
+    await waitFor(() =>
+      expect(vi.mocked(axios.post).mock.calls.length).toBeGreaterThan(postCallsBeforeAdd)
+    );
+    expect(infoSpy).not.toHaveBeenCalledWith(expect.stringMatching(/已在股票池中/));
+    const lastBody = vi.mocked(axios.post).mock.calls.at(-1)?.[1] as {
+      inputs: Array<{ stockCode: string; market: string }>;
+    };
+    expect(lastBody.inputs[0]).toMatchObject({ stockCode: 'AAPL', market: 'us' });
+  });
+
   it('persists stock pool order on unmount', async () => {
     vi.mocked(axios.post).mockResolvedValue({ data: { rows: [] } });
     const { unmount } = render(<GrahamValuation />);
     await waitFor(() => expect(axios.post).toHaveBeenCalled());
     unmount();
     expect(writeStockPool).toHaveBeenCalledWith('cn', ['600519.SH']);
+  });
+
+  it('renders 最近收盘价 column header instead of 现价', async () => {
+    vi.mocked(axios.post).mockResolvedValueOnce({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '贵州茅台',
+            currentPrice: 1500,
+            startYear: 2020,
+            endYear: 2024,
+            startEPS: 40,
+            endEPS: 60,
+            R: 10,
+            grahamPrice: 1200,
+            priceDeviationPercent: -20,
+            dataAsOfDate: '2026-06-11',
+            status: 'OK',
+            message: '',
+          },
+        ],
+      },
+    });
+
+    render(<GrahamValuation />);
+    await waitFor(() => {
+      expect(screen.getByRole('columnheader', { name: '最近收盘价' })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('columnheader', { name: '现价' })).not.toBeInTheDocument();
+  });
+
+  it('shows status column with tooltip message for ERROR row', async () => {
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        rows: [
+          {
+            stockCode: '600519.SH',
+            stockName: '贵州茅台',
+            currentPrice: 1500,
+            startYear: 2019,
+            endYear: 2024,
+            dataAsOfDate: '2026-06-10',
+            status: 'ERROR',
+            message: '缺少 2019 年扣非 EPS 数据（可用年份: 2021, 2022）',
+          },
+        ],
+      },
+    });
+
+    render(<GrahamValuation />);
+    await waitFor(() => expect(screen.getByText('失败')).toBeInTheDocument());
   });
 });

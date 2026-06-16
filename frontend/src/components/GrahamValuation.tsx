@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useContext, useMemo } from 'react';
-import { Form, Input, InputNumber, Button, Card, Table, Typography, Space, message, Alert, Tooltip, Row, Col, Modal } from 'antd';
+import { Form, Input, InputNumber, Button, Card, Table, Typography, Space, message, Tooltip, Row, Col, Modal, Tag } from 'antd';
 import {
   InfoCircleOutlined,
   DeleteOutlined,
@@ -9,6 +9,7 @@ import {
   HolderOutlined,
 } from '@ant-design/icons';
 import axios from 'axios';
+import { axiosErrorMessage } from '../utils/axiosErrorMessage';
 import {
   DndContext,
   PointerSensor,
@@ -31,6 +32,8 @@ import {
   stockCodeErrorForMarket,
   stockCodePlaceholderForMarket,
 } from '../utils/stock';
+import { normalizeCodesForPool, resolveAddStockFetchPlan } from '../utils/grahamAddStock';
+import { buildDisplayRowsForPool, createGrahamPlaceholderRow } from '../utils/grahamPoolDisplay';
 import {
   reorderStockPoolBySortedRows,
   sortValuationRowsByDeviationAsc,
@@ -38,6 +41,11 @@ import {
 import { readStockPool, writeStockPool } from '../utils/grahamStockPool';
 import { orderValuationRowsByPool } from '../utils/orderValuationRowsByPool';
 import { DEFAULT_R_GROWTH_COEFF, recalcValuationPrices } from '../utils/grahamFormula';
+import {
+  formatGrahamStatusMessage,
+  grahamStatusLabel,
+  grahamStatusTagColor,
+} from '../utils/grahamRowStatus';
 
 const { Title, Text } = Typography;
 
@@ -45,6 +53,7 @@ export interface ValuationRow {
   stockCode: string;
   stockName: string;
   currentPrice: number;
+  dataSource?: string;
   startYear: number;
   endYear: number;
   startEPS?: number;
@@ -172,6 +181,14 @@ export const GrahamValuation: React.FC = () => {
     };
   }, [form, initialParams]);
 
+  const displayRows = useMemo(() => {
+    const params = getGrahamParams();
+    return buildDisplayRowsForPool(stockPool, data, {
+      loading,
+      params: { startYear: params.startYear, endYear: params.endYear },
+    }) as ValuationRow[];
+  }, [stockPool, data, loading, getGrahamParams]);
+
   useEffect(() => {
     const pool = readStockPool(market);
     setStockPool(pool);
@@ -241,9 +258,9 @@ export const GrahamValuation: React.FC = () => {
       orderPool,
     } = options;
     if (codes.length === 0) return { ok: true, rows: [] };
+    const params = getGrahamParams();
     try {
       setLoading(true);
-      const params = getGrahamParams();
       const inputs = codes.map(code => ({
         stockCode: code,
         startYear: params.startYear,
@@ -277,10 +294,26 @@ export const GrahamValuation: React.FC = () => {
       return { ok: true, rows };
     } catch (error: unknown) {
       console.error(error);
-      const errorMessage = axios.isAxiosError(error)
-        ? (error.response?.data?.error || '请求失败，请检查网络')
-        : '发生了未知错误';
+      const errorMessage = axiosErrorMessage(error);
       message.error(errorMessage);
+      setData(prev => {
+        const newData = isRefreshAll ? [] : [...prev];
+        const poolOrder = orderPool ?? (stockPool.length > 0 ? stockPool : codes);
+        codes.forEach(code => {
+          const placeholder = createGrahamPlaceholderRow(
+            code,
+            { startYear: params.startYear, endYear: params.endYear },
+            errorMessage
+          );
+          const idx = newData.findIndex(r => r.stockCode === code);
+          if (idx !== -1) {
+            newData[idx] = placeholder;
+          } else {
+            newData.push(placeholder);
+          }
+        });
+        return orderValuationRowsByPool(newData, poolOrder);
+      });
       return { ok: false, rows: [], errorMessage };
     } finally {
       setLoading(false);
@@ -297,49 +330,47 @@ export const GrahamValuation: React.FC = () => {
       return;
     }
 
-    const normalizedCodes = codes.map(code =>
-      market === 'us' ? code.trim().toUpperCase() : code.trim()
+    const normalizedCodes = normalizeCodesForPool(codes, market);
+    const { codesToFetch, duplicateOnly } = resolveAddStockFetchPlan(
+      normalizedCodes,
+      stockPool,
+      data
     );
-    const duplicateCodes = normalizedCodes.filter(code => stockPool.includes(code));
-    if (duplicateCodes.length === normalizedCodes.length) {
-      message.info('该股票已在池中或输入无效');
+    if (codesToFetch.length === 0 && duplicateOnly.length === normalizedCodes.length) {
+      message.info(`${duplicateOnly.join(', ')} 已在股票池中`);
       setNewStockCode('');
       return;
     }
 
-    const pendingCodes = normalizedCodes.filter(code => !stockPool.includes(code));
-    if (stockPool.length + pendingCodes.length > 50) {
+    const newPoolCodes = codesToFetch.filter(code => !stockPool.includes(code));
+    if (stockPool.length + newPoolCodes.length > 50) {
       message.warning('股票池最多允许 50 只股票');
       return;
     }
 
-    const nextPool = [...stockPool, ...pendingCodes];
-    const result = await fetchValuations(pendingCodes, {
+    const nextPool = [...new Set([...stockPool, ...codesToFetch])];
+    setStockPool(nextPool);
+    persistStockPool(nextPool);
+
+    const result = await fetchValuations(codesToFetch, {
       refreshPolicy: 'default',
       orderPool: nextPool,
     });
-    if (!result.ok) {
-      return;
-    }
 
     const succeeded = result.rows.filter(row => row.status === 'OK' || row.status === 'WARNING');
     const failed = result.rows.filter(row => row.status === 'ERROR');
 
     if (succeeded.length > 0) {
-      const addedCodes = succeeded.map(row => row.stockCode);
-      setStockPool(prev => {
-        const next = [...prev, ...addedCodes];
-        persistStockPool(next);
-        return next;
-      });
       setNewStockCode('');
-      message.success(`已添加 ${addedCodes.join(', ')}`);
+      message.success(`已添加 ${succeeded.map(row => row.stockCode).join(', ')}`);
     }
 
     if (failed.length > 0) {
       message.error(failed.map(row => `${row.stockCode}: ${row.message}`).join('；'));
+    } else if (!result.ok) {
+      /* fetchValuations already surfaced the network error */
     } else if (succeeded.length === 0) {
-      message.error('未能获取有效估值数据，股票未加入股票池');
+      message.error('未能获取有效估值数据');
     }
   };
 
@@ -384,16 +415,16 @@ export const GrahamValuation: React.FC = () => {
   };
 
   const handleSortByDeviation = () => {
-    if (data.length < 2) {
+    if (displayRows.length < 2) {
       message.info('至少需要 2 只股票才能排序');
       return;
     }
-    const sortableCount = data.filter(row => row.priceDeviationPercent != null).length;
+    const sortableCount = displayRows.filter(row => row.priceDeviationPercent != null).length;
     if (sortableCount < 2) {
       message.info('至少需要 2 只有效偏离率的股票才能排序');
       return;
     }
-    const sortedRows = sortValuationRowsByDeviationAsc(data);
+    const sortedRows = sortValuationRowsByDeviationAsc(displayRows);
     setData(sortedRows);
     setStockPool(prev => {
       const next = reorderStockPoolBySortedRows(prev, sortedRows);
@@ -406,10 +437,10 @@ export const GrahamValuation: React.FC = () => {
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = data.findIndex(r => r.stockCode === active.id);
-    const newIndex = data.findIndex(r => r.stockCode === over.id);
+    const oldIndex = displayRows.findIndex(r => r.stockCode === active.id);
+    const newIndex = displayRows.findIndex(r => r.stockCode === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
-    const reorderedData = arrayMove(data, oldIndex, newIndex);
+    const reorderedData = arrayMove(displayRows, oldIndex, newIndex);
     const reorderedPool = reorderedData.map(r => r.stockCode);
     setData(reorderedData);
     setStockPool(reorderedPool);
@@ -434,12 +465,12 @@ export const GrahamValuation: React.FC = () => {
         render: (text: string) => <Text strong>{text || '-'}</Text>,
       },
       {
-        title: '每股净资产',
+        title: 'BVPS',
         dataIndex: 'bvps',
         key: 'bvps',
         render: (v: number) => (v != null ? v.toFixed(2) : '-'),
       },
-      { title: '现价', dataIndex: 'currentPrice', key: 'currentPrice', render: (v: number) => v?.toFixed(2) },
+      { title: '最近收盘价', dataIndex: 'currentPrice', key: 'currentPrice', render: (v: number) => v?.toFixed(2) },
       {
         title: 'Beg. Adj. EPS',
         dataIndex: 'startEPS',
@@ -506,13 +537,42 @@ export const GrahamValuation: React.FC = () => {
       },
       {
         title: '状态',
+        dataIndex: 'status',
         key: 'status',
-        render: (_: unknown, r: ValuationRow) => {
-          if (r.status === 'OK')
-            return <Alert type="success" message="计算成功" showIcon style={{ padding: '0px 8px', fontSize: '12px' }} />;
-          if (r.status === 'WARNING')
-            return <Alert type="warning" message={r.message} showIcon style={{ padding: '0px 8px', fontSize: '12px' }} />;
-          return <Alert type="error" message={r.message} showIcon style={{ padding: '0px 8px', fontSize: '12px' }} />;
+        width: 88,
+        fixed: 'right' as const,
+        render: (status: ValuationRow['status'], row: ValuationRow) => (
+          <Tooltip title={formatGrahamStatusMessage(row)}>
+            <Tag color={grahamStatusTagColor(status)} style={{ margin: 0, cursor: 'help' }}>
+              {grahamStatusLabel(status)}
+            </Tag>
+          </Tooltip>
+        ),
+      },
+
+      {
+        title: '数据源',
+        dataIndex: 'dataSource',
+        key: 'dataSource',
+        width: 90,
+        render: (text: string) => {
+          if (!text) return '-';
+          const nameMap: Record<string, string> = {
+            eastmoney_api: '东方财富',
+            eastmoney: '东方财富',
+            cninfo: '巨潮资讯',
+            baostock: 'BaoStock',
+            akshare_generic: 'AKShare',
+            tushare: 'Tushare',
+            sina: '新浪财经',
+            sohu: '搜狐财经',
+            yahoo: 'Yahoo',
+            sec_edgar: 'SEC Edgar',
+            daily_bars_bridge: '行情兜底',
+            mock: 'Mock',
+          };
+          const displayName = nameMap[text] || text;
+          return <Tag color={text === 'mock' ? 'error' : 'blue'} style={{ margin: 0, border: 'none' }}>{displayName}</Tag>;
         },
       },
       {
@@ -658,7 +718,7 @@ export const GrahamValuation: React.FC = () => {
           <Button
             icon={<SortAscendingOutlined />}
             onClick={handleSortByDeviation}
-            disabled={data.length < 2 || loading}
+            disabled={displayRows.length < 2 || loading}
           >
             按偏离率排序
           </Button>
@@ -678,19 +738,35 @@ export const GrahamValuation: React.FC = () => {
           </Space>
         </Space>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={data.map(r => r.stockCode)} strategy={verticalListSortingStrategy}>
+          <SortableContext items={displayRows.map(r => r.stockCode)} strategy={verticalListSortingStrategy}>
             <Table
-              dataSource={data}
+              dataSource={displayRows}
               columns={columns}
               rowKey="stockCode"
               pagination={false}
               scroll={{ x: 'max-content' }}
               size="middle"
               components={{ body: { row: SortableRow } }}
-              locale={{ emptyText: loading ? '正在加载...' : '暂无数据，请在上方添加股票' }}
+              locale={{ emptyText: '暂无数据，请在上方添加股票' }}
             />
           </SortableContext>
         </DndContext>
+        
+        <div style={{ marginTop: 24, padding: 16, background: 'rgba(255, 255, 255, 0.02)', borderRadius: 8 }}>
+          <Text type="secondary" style={{ fontSize: '13px', display: 'block', marginBottom: 8, color: '#e2e8f0' }}>
+            <InfoCircleOutlined style={{ marginRight: 6 }} />
+            <strong style={{ color: '#f8fafc' }}>数据源标识说明：</strong>（系统会自动跨接口寻找最稳定的数据源并降级）
+          </Text>
+          <Text type="secondary" style={{ fontSize: '13px', display: 'block', marginBottom: 6, marginLeft: 20 }}>
+            • <Tag color="blue" style={{ border: 'none' }}>常规数据源</Tag>（如东方财富 / 巨潮资讯 / SEC Edgar / Yahoo 等）：代表主干网络顺畅，成功通过该主流接口获取到了最新的财务报表和最近收盘价。
+          </Text>
+          <Text type="secondary" style={{ fontSize: '13px', display: 'block', marginBottom: 6, marginLeft: 20 }}>
+            • <Tag color="blue" style={{ border: 'none' }}>行情兜底</Tag>：当常规数据源的收盘价接口未响应或遇到节假日/停牌时，自动触发的一套高级容错机制。系统会自动抓取历史 K 线数据的最近一个收盘价完成估值。
+          </Text>
+          <Text type="secondary" style={{ fontSize: '13px', display: 'block', marginLeft: 20 }}>
+            • <Tag color="error" style={{ border: 'none' }}>Mock</Tag>：当所有在线数据源均不可用时（如遭遇严厉拦截或断网），使用的本地内置模拟数据。此数据仅用于演示，不具备真实的投资参考价值。
+          </Text>
+        </div>
       </Card>
     </div>
   );
